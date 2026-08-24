@@ -1,122 +1,130 @@
-import { useState } from 'react'
-import heroImg from './assets/hero.png'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import './App.css'
+import { useMemo, type ChangeEvent } from 'react';
+import { foldResult } from './core/result';
+import { useAppStore } from './features/workflow/store';
+import { routeByNineRouter, type RouterPolicy } from './features/router/nineRouter';
+import { compressContext } from './features/context/compressedContext';
+import type { ContextMessage } from './domain/automation';
 
-function App() {
-  const [count, setCount] = useState(0)
-
-  return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
-
-      <div className="ticks"></div>
-
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
-  )
+function toPositiveNumber(value: string): number | null {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
+  }
+  return parsed;
 }
 
-export default App
+export default function App() {
+  const { routerPolicy, sampleInput, setRouterPolicy, setSampleInput } = useAppStore();
+
+  const route = useMemo(
+    () => routeByNineRouter(sampleInput, routerPolicy),
+    [sampleInput, routerPolicy],
+  );
+
+  const compressed = useMemo(() => {
+    const messages: ContextMessage[] = [{ role: 'user', content: sampleInput }];
+    return compressContext(messages, routerPolicy.premiumMaxTokens);
+  }, [sampleInput, routerPolicy.premiumMaxTokens]);
+
+  const updatePolicy = (key: keyof RouterPolicy, rawValue: string) => {
+    const value = toPositiveNumber(rawValue);
+    if (value === null) {
+      return;
+    }
+    setRouterPolicy({ [key]: value } as Partial<RouterPolicy>);
+  };
+
+  const handleInputChange = (event: ChangeEvent<HTMLTextAreaElement>) => {
+    setSampleInput(event.target.value);
+  };
+
+  const handlePolicyChange =
+    (key: keyof RouterPolicy) => (event: ChangeEvent<HTMLInputElement>) => {
+      updatePolicy(key, event.target.value);
+    };
+
+  return (
+    <div style={{ maxWidth: '800px', margin: '0 auto', padding: '20px' }}>
+      <h1>Otomation Setting — Test Panel</h1>
+      <p>9Router + Compressed Context engine testing</p>
+
+      <section style={{ marginBottom: '20px' }}>
+        <h2>Sample Input</h2>
+        <textarea
+          style={{ width: '100%', minHeight: '100px', padding: '8px' }}
+          value={sampleInput}
+          onChange={handleInputChange}
+        />
+      </section>
+
+      <section style={{ marginBottom: '20px' }}>
+        <h2>9Router Decision</h2>
+        {foldResult(
+          route,
+          (decision) => (
+            <div>
+              <p><strong>Tier:</strong> {decision.tier}</p>
+              <p><strong>Provider:</strong> {decision.provider}</p>
+              <p><strong>Model:</strong> {decision.model}</p>
+              <p><strong>Estimated tokens:</strong> {decision.estimatedTokens}</p>
+              <p><strong>Reason:</strong> {decision.reason}</p>
+            </div>
+          ),
+          (error) => <p style={{ color: 'red' }}>{error.message}</p>,
+        )}
+      </section>
+
+      <section style={{ marginBottom: '20px' }}>
+        <h2>Compressed Context</h2>
+        {foldResult(
+          compressed,
+          (ctx) => (
+            <div>
+              <p><strong>Estimated tokens:</strong> {ctx.estimatedTokens}</p>
+              <p><strong>Dropped messages:</strong> {ctx.droppedMessages}</p>
+              {ctx.summary !== '' && <p><strong>Summary:</strong> {ctx.summary}</p>}
+            </div>
+          ),
+          (error) => <p style={{ color: 'red' }}>{error.message}</p>,
+        )}
+      </section>
+
+      <section>
+        <h2>Router Policy</h2>
+        <div style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
+          <label>
+            Cheap max tokens:
+            <input
+              type="number"
+              value={routerPolicy.cheapMaxTokens}
+              onChange={handlePolicyChange('cheapMaxTokens')}
+              style={{ marginLeft: '5px', width: '100px' }}
+            />
+          </label>
+        </div>
+        <div style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
+          <label>
+            Standard max tokens:
+            <input
+              type="number"
+              value={routerPolicy.standardMaxTokens}
+              onChange={handlePolicyChange('standardMaxTokens')}
+              style={{ marginLeft: '5px', width: '100px' }}
+            />
+          </label>
+        </div>
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <label>
+            Premium max tokens:
+            <input
+              type="number"
+              value={routerPolicy.premiumMaxTokens}
+              onChange={handlePolicyChange('premiumMaxTokens')}
+              style={{ marginLeft: '5px', width: '100px' }}
+            />
+          </label>
+        </div>
+      </section>
+    </div>
+  );
+}
