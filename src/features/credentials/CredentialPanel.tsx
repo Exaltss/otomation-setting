@@ -1,5 +1,5 @@
 /**
- * UI manajemen credential provider.
+ * UI manajemen credential + vault lock/unlock.
  * Raw key tidak pernah dirender — hanya bentuk redacted.
  */
 import { useState, type FormEvent } from 'react';
@@ -7,27 +7,54 @@ import { foldResult } from '../../core/result';
 import type { ProviderId } from '../../domain/automation';
 import {
   PROVIDER_OPTIONS,
+  isUnlocked,
   listCredentials,
+  lockVault,
   removeApiKey,
   saveApiKey,
+  unlockVault,
   type ProviderCredential,
 } from '../../services/providerService';
 
 export function CredentialPanel() {
+  const [unlocked, setUnlocked] = useState<boolean>(() => isUnlocked());
+  const [vaultPassword, setVaultPassword] = useState('');
   const [provider, setProvider] = useState<ProviderId>('groq');
   const [apiKey, setApiKey] = useState('');
   const [credentials, setCredentials] = useState<ProviderCredential[]>(() =>
     listCredentials(),
   );
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
   const refresh = () => setCredentials(listCredentials());
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const handleUnlock = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    setBusy(true);
 
+    const result = await unlockVault(vaultPassword);
     foldResult(
-      saveApiKey(provider, apiKey),
+      result,
+      () => {
+        setUnlocked(true);
+        setVaultPassword('');
+        setFeedback('Vault unlocked.');
+        refresh();
+      },
+      (error) => setFeedback(`Error: ${error.message}`),
+    );
+
+    setBusy(false);
+  };
+
+  const handleSave = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setBusy(true);
+
+    const result = await saveApiKey(provider, apiKey);
+    foldResult(
+      result,
       (saved) => {
         setFeedback(`Saved: ${saved.provider} (${saved.redactedKey})`);
         setApiKey('');
@@ -35,6 +62,8 @@ export function CredentialPanel() {
       },
       (error) => setFeedback(`Error: ${error.message}`),
     );
+
+    setBusy(false);
   };
 
   const handleRemove = (target: ProviderId) => {
@@ -48,10 +77,45 @@ export function CredentialPanel() {
     );
   };
 
+  const handleLock = () => {
+    lockVault();
+    setUnlocked(false);
+    setCredentials([]);
+    setFeedback('Vault locked.');
+  };
+
+  if (!unlocked) {
+    return (
+      <div>
+        <form
+          onSubmit={handleUnlock}
+          style={{ display: 'flex', gap: '10px', alignItems: 'flex-end' }}
+        >
+          <label>
+            Vault password:
+            <input
+              type="password"
+              value={vaultPassword}
+              onChange={(event) => setVaultPassword(event.target.value)}
+              style={{ marginLeft: '5px' }}
+            />
+          </label>
+          <button type="submit" disabled={busy} style={{ padding: '4px 12px' }}>
+            Unlock
+          </button>
+        </form>
+        <p style={{ fontSize: '12px', opacity: 0.7 }}>
+          Unlock pertama sekaligus men-set master password vault ini.
+        </p>
+        {feedback !== null && <p>{feedback}</p>}
+      </div>
+    );
+  }
+
   return (
     <div>
       <form
-        onSubmit={handleSubmit}
+        onSubmit={handleSave}
         style={{ display: 'flex', gap: '10px', alignItems: 'flex-end', marginBottom: '10px' }}
       >
         <label>
@@ -80,8 +144,11 @@ export function CredentialPanel() {
           />
         </label>
 
-        <button type="submit" style={{ padding: '4px 12px' }}>
+        <button type="submit" disabled={busy} style={{ padding: '4px 12px' }}>
           Save
+        </button>
+        <button type="button" onClick={handleLock} style={{ padding: '4px 12px' }}>
+          Lock
         </button>
       </form>
 
