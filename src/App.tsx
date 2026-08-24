@@ -2,6 +2,7 @@ import { useMemo, type ChangeEvent } from 'react';
 import { foldResult } from './core/result';
 import { useAppStore } from './features/workflow/store';
 import { Canvas } from './features/workflow/Canvas';
+import { CredentialPanel } from './features/credentials/CredentialPanel';
 import { routeByNineRouter, type RouterPolicy } from './features/router/nineRouter';
 import { compressContext } from './features/context/compressedContext';
 import type { ContextMessage } from './domain/automation';
@@ -127,9 +128,14 @@ export default function App() {
         </div>
       </section>
 
-      <section>
+      <section style={{ marginBottom: '20px' }}>
         <h2>Workflow Canvas</h2>
         <Canvas />
+      </section>
+
+      <section>
+        <h2>API Key Management</h2>
+        <CredentialPanel />
       </section>
     </div>
   );
