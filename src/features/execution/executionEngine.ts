@@ -1,14 +1,14 @@
 /**
  * Execution engine — orchestrator pipeline automation.
  *
- * Alur: 9Router -> Credit Guard -> Compressed Context -> Adapter -> Vault -> Execute.
+ * Alur: 9Router -> Credit Guard -> Compressed Context(history) -> Adapter -> Vault -> Execute.
  * Resolusi model: override manual -> katalog API key (auto) -> fallback default tier.
- * Result di boundary (executeWorkflow), alur linear di internal (runPipeline).
  */
 import { err, ok, unwrap, type Result } from '../../core/result';
 import type {
   CompressedContext,
   ContextMessage,
+  ProviderId,
   RoutingDecision,
 } from '../../domain/automation';
 import { getApiKey } from '../../services/providerService';
@@ -25,14 +25,20 @@ const BASE_SYSTEM_PROMPT =
 export interface ExecutionInput {
   payload: string;
   policy: RouterPolicy;
-  /** Model pilihan user dari dropdown (Fase 11C). Kosong = auto dari katalog key. */
+  /** Riwayat percakapan sebelumnya (tanpa system prompt). */
+  history?: ContextMessage[];
+  /** Model pilihan user dari dropdown chat. */
   modelOverride?: string;
+  /** Provider paksaan saat user memilih model manual. */
+  providerOverride?: ProviderId;
 }
 
 export interface ExecutionReport {
   routing: RoutingDecision;
-  compressed: CompressedContext;
+  providerUsed: ProviderId;
   modelUsed: string;
+  overrideUsed: boolean;
+  compressed: CompressedContext;
   output: string;
   durationMs: number;
   usageAfter: number;
@@ -46,29 +52,33 @@ async function runPipeline(input: ExecutionInput): Promise<ExecutionReport> {
     throw new Error('Trigger payload is empty.');
   }
 
-  // 1) 9Router: tier + provider paling hemat yang mampu menangani tugas.
+  // 1) 9Router: saran tier + provider paling hemat.
   const routing = unwrap(routeByNineRouter(payload, input.policy));
 
-  // 2) Credit Guard: tolak SEBELUM eksekusi jika budget harian habis.
+  // 2) Credit Guard: tolak sebelum eksekusi jika budget habis.
   unwrap(checkBudget(routing.estimatedTokens));
 
-  // 3) Compressed Context: padatkan sebelum dikirim.
+  // 3) Provider eksekusi: override manual atau saran router.
+  const providerUsed = input.providerOverride ?? routing.provider;
+
+  // 4) Compressed Context: system + riwayat + pertanyaan baru, dipadatkan.
   const messages: ContextMessage[] = [
     { role: 'system', content: BASE_SYSTEM_PROMPT },
+    ...(input.history ?? []),
     { role: 'user', content: payload },
   ];
   const compressed = unwrap(
     compressContext(messages, input.policy.premiumMaxTokens),
   );
 
-  // 4) Adapter + key dari vault terenkripsi.
-  const adapter = unwrap(getAdapter(routing.provider));
-  const apiKey = unwrap(await getApiKey(routing.provider));
+  // 5) Adapter + key dari vault.
+  const adapter = unwrap(getAdapter(providerUsed));
+  const apiKey = unwrap(await getApiKey(providerUsed));
 
-  // 5) Resolusi model: override manual -> katalog key (auto) -> fallback tier.
+  // 6) Resolusi model: override manual -> katalog key (auto) -> fallback tier.
   let modelUsed = input.modelOverride ?? null;
   if (modelUsed === null) {
-    const catalog = await fetchModels(routing.provider, apiKey);
+    const catalog = await fetchModels(providerUsed, apiKey);
     if (catalog.ok) {
       modelUsed = pickModelForTier(routing.tier, catalog.value);
     }
@@ -82,40 +92,43 @@ async function runPipeline(input: ExecutionInput): Promise<ExecutionReport> {
       ? `${BASE_SYSTEM_PROMPT}\nCompressed context summary: ${compressed.summary}`
       : BASE_SYSTEM_PROMPT;
 
+  const finalMessages: ContextMessage[] = [
+    { role: 'system', content: systemPrompt },
+    ...compressed.messages.filter((m) => m.role !== 'system'),
+  ];
+
   const request: ExecutionRequest = {
     model: modelUsed,
-    systemPrompt,
-    userPrompt: payload,
+    messages: finalMessages,
     apiKey,
   };
 
-  // 6) Eksekusi.
+  // 7) Eksekusi.
   const response = unwrap(await adapter.execute(request));
 
-  // 7) Catat pemakaian token (hanya eksekusi sukses).
-  const usage = recordUsage(routing.provider, routing.estimatedTokens);
+  // 8) Catat pemakaian token.
+  const usage = recordUsage(providerUsed, routing.estimatedTokens);
 
   return {
     routing,
-    compressed,
+    providerUsed,
     modelUsed,
+    overrideUsed: input.modelOverride !== undefined || input.providerOverride !== undefined,
+    compressed,
     output: response.output,
     durationMs: Math.round(performance.now() - startedAt),
     usageAfter: usage.totalTokens,
   };
 }
 
-/**
- * Boundary publik: tidak pernah throw.
- * Semua kegagalan dikembalikan sebagai Result + tercatat di history.
- */
+/** Boundary publik: tidak pernah throw; gagal = Result + history. */
 export async function executeWorkflow(
   input: ExecutionInput,
 ): Promise<Result<ExecutionReport, Error>> {
   try {
     const report = await runPipeline(input);
     appendHistory({
-      provider: report.routing.provider,
+      provider: report.providerUsed,
       tier: report.routing.tier,
       estimatedTokens: report.routing.estimatedTokens,
       durationMs: report.durationMs,

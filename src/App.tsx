@@ -1,14 +1,11 @@
 import { useState } from 'react';
 import { Shell, type ViewId } from './features/shell/Shell';
+import { ChatView } from './features/chat/ChatView';
 import { AlatView } from './features/views/AlatView';
 import { SettingsView } from './features/views/SettingsView';
 
-function ChatView() {
-  return <p>💬 Chat AI — hadir di Fase 12B.</p>;
-}
-
 function ProvidersView() {
-  return <p>🔌 AI Provider & katalog model dari key — hadir di Fase 12B.</p>;
+  return <p>🔌 AI Provider & katalog model dari key — hadir di Fase 12C.</p>;
 }
 
 function QuotaView() {

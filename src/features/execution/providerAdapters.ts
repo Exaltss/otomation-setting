@@ -1,17 +1,13 @@
 /**
  * Provider adapters — strategy pattern untuk eksekusi LLM.
- * Execution engine hanya bicara pada kontrak ProviderAdapter.
- *
- * NVIDIA NIM (integrate.api.nvidia.com) OpenAI-compatible,
- * sehingga openai & nvidia berbagi satu implementasi factory (DRY).
+ * Request membawa messages penuh agar mendukung riwayat chat.
  */
 import { err, ok, type Result } from '../../core/result';
-import type { ProviderId } from '../../domain/automation';
+import type { ContextMessage, ProviderId } from '../../domain/automation';
 
 export interface ExecutionRequest {
   model: string;
-  systemPrompt: string;
-  userPrompt: string;
+  messages: ContextMessage[];
   apiKey: string;
 }
 
@@ -26,7 +22,6 @@ export interface ProviderAdapter {
   execute(request: ExecutionRequest): Promise<Result<ExecutionResponse, Error>>;
 }
 
-/** Base URL API yang OpenAI-compatible. Single source of truth. */
 const OPENAI_COMPATIBLE_BASE_URLS: Partial<Record<ProviderId, string>> = {
   openai: 'https://api.openai.com/v1',
   nvidia: 'https://integrate.api.nvidia.com/v1',
@@ -36,20 +31,19 @@ export function getOpenAiCompatibleBaseUrl(provider: ProviderId): string | null 
   return OPENAI_COMPATIBLE_BASE_URLS[provider] ?? null;
 }
 
-/** Adapter mock untuk tier cheap — zero cost, untuk testing & demo. */
 const localAdapter: ProviderAdapter = {
   provider: 'local',
   async execute(request) {
     await new Promise((resolve) => setTimeout(resolve, 150));
+    const lastUser = [...request.messages].reverse().find((m) => m.role === 'user');
     return ok({
       provider: 'local',
       model: request.model,
-      output: `[local mock] Echo: ${request.userPrompt.slice(0, 140)}`,
+      output: `[local mock] Echo: ${lastUser?.content.slice(0, 140) ?? ''}`,
     });
   },
 };
 
-/** Parse error HTTP secara aman (body error API atau fallback status). */
 async function readApiError(response: Response): Promise<string> {
   try {
     const body = (await response.json()) as { error?: { message?: string } };
@@ -59,10 +53,6 @@ async function readApiError(response: Response): Promise<string> {
   }
 }
 
-/**
- * Factory untuk API yang OpenAI-compatible (OpenAI, NVIDIA NIM, Groq, dll).
- * Menambah provider compatible = satu entri di map base URL.
- */
 function createOpenAiCompatibleAdapter(
   provider: ProviderId,
   baseUrl: string,
@@ -79,10 +69,7 @@ function createOpenAiCompatibleAdapter(
           },
           body: JSON.stringify({
             model: request.model,
-            messages: [
-              { role: 'system', content: request.systemPrompt },
-              { role: 'user', content: request.userPrompt },
-            ],
+            messages: request.messages,
             max_tokens: 512,
           }),
         });
@@ -109,6 +96,18 @@ const anthropicAdapter: ProviderAdapter = {
   provider: 'anthropic',
   async execute(request) {
     try {
+      const system = request.messages
+        .filter((m) => m.role === 'system')
+        .map((m) => m.content)
+        .join('\n');
+
+      const conversation = request.messages
+        .filter((m) => m.role !== 'system')
+        .map((m) => ({
+          role: m.role === 'assistant' ? ('assistant' as const) : ('user' as const),
+          content: m.content,
+        }));
+
       const response = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: {
@@ -120,8 +119,8 @@ const anthropicAdapter: ProviderAdapter = {
         body: JSON.stringify({
           model: request.model,
           max_tokens: 512,
-          system: request.systemPrompt,
-          messages: [{ role: 'user', content: request.userPrompt }],
+          system,
+          messages: conversation,
         }),
       });
 

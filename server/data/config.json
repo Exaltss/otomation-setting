@@ -1,0 +1,10 @@
+{
+  "model": "stepfun-ai/step-3.7-flash",
+  "tiers": {
+    "cheap": null,
+    "standard": null,
+    "premium": null
+  },
+  "fallbackModels": [],
+  "creditLimitPerDay": 100000
+}
