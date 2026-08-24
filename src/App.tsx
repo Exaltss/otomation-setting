@@ -1,6 +1,7 @@
 import { useMemo, type ChangeEvent } from 'react';
 import { foldResult } from './core/result';
 import { useAppStore } from './features/workflow/store';
+import { Canvas } from './features/workflow/Canvas';
 import { routeByNineRouter, type RouterPolicy } from './features/router/nineRouter';
 import { compressContext } from './features/context/compressedContext';
 import type { ContextMessage } from './domain/automation';
@@ -44,7 +45,7 @@ export default function App() {
     };
 
   return (
-    <div style={{ maxWidth: '800px', margin: '0 auto', padding: '20px' }}>
+    <div style={{ maxWidth: '1000px', margin: '0 auto', padding: '20px' }}>
       <h1>Otomation Setting — Test Panel</h1>
       <p>9Router + Compressed Context engine testing</p>
 
@@ -89,7 +90,7 @@ export default function App() {
         )}
       </section>
 
-      <section>
+      <section style={{ marginBottom: '20px' }}>
         <h2>Router Policy</h2>
         <div style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
           <label>
@@ -124,6 +125,11 @@ export default function App() {
             />
           </label>
         </div>
+      </section>
+
+      <section>
+        <h2>Workflow Canvas</h2>
+        <Canvas />
       </section>
     </div>
   );
