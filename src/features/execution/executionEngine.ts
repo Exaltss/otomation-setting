@@ -1,7 +1,8 @@
 /**
  * Execution engine — orchestrator pipeline automation.
  *
- * Alur: 9Router -> Compressed Context -> Adapter -> Vault key -> Execute.
+ * Alur: 9Router -> Credit Guard -> Compressed Context -> Adapter -> Vault -> Execute.
+ * Resolusi model: override manual -> katalog API key (auto) -> fallback default tier.
  * Result di boundary (executeWorkflow), alur linear di internal (runPipeline).
  */
 import { err, ok, unwrap, type Result } from '../../core/result';
@@ -13,6 +14,9 @@ import type {
 import { getApiKey } from '../../services/providerService';
 import { compressContext } from '../context/compressedContext';
 import { routeByNineRouter, type RouterPolicy } from '../router/nineRouter';
+import { checkBudget, recordUsage } from './creditGuard';
+import { appendHistory } from './executionHistory';
+import { fetchModels, pickModelForTier } from './modelCatalog';
 import { getAdapter, type ExecutionRequest } from './providerAdapters';
 
 const BASE_SYSTEM_PROMPT =
@@ -21,13 +25,17 @@ const BASE_SYSTEM_PROMPT =
 export interface ExecutionInput {
   payload: string;
   policy: RouterPolicy;
+  /** Model pilihan user dari dropdown (Fase 11C). Kosong = auto dari katalog key. */
+  modelOverride?: string;
 }
 
 export interface ExecutionReport {
   routing: RoutingDecision;
   compressed: CompressedContext;
+  modelUsed: string;
   output: string;
   durationMs: number;
+  usageAfter: number;
 }
 
 async function runPipeline(input: ExecutionInput): Promise<ExecutionReport> {
@@ -38,10 +46,13 @@ async function runPipeline(input: ExecutionInput): Promise<ExecutionReport> {
     throw new Error('Trigger payload is empty.');
   }
 
-  // 1) 9Router: provider/model paling hemat yang mampu menangani tugas.
+  // 1) 9Router: tier + provider paling hemat yang mampu menangani tugas.
   const routing = unwrap(routeByNineRouter(payload, input.policy));
 
-  // 2) Compressed Context: padatkan sebelum dikirim (hemat token/credit).
+  // 2) Credit Guard: tolak SEBELUM eksekusi jika budget harian habis.
+  unwrap(checkBudget(routing.estimatedTokens));
+
+  // 3) Compressed Context: padatkan sebelum dikirim.
   const messages: ContextMessage[] = [
     { role: 'system', content: BASE_SYSTEM_PROMPT },
     { role: 'user', content: payload },
@@ -50,44 +61,76 @@ async function runPipeline(input: ExecutionInput): Promise<ExecutionReport> {
     compressContext(messages, input.policy.premiumMaxTokens),
   );
 
-  // 3) Adapter + key dari vault terenkripsi.
+  // 4) Adapter + key dari vault terenkripsi.
   const adapter = unwrap(getAdapter(routing.provider));
   const apiKey = unwrap(await getApiKey(routing.provider));
 
-  // 4) Ringkasan konteks (jika ada) ikut dikirim sebagai system prompt.
+  // 5) Resolusi model: override manual -> katalog key (auto) -> fallback tier.
+  let modelUsed = input.modelOverride ?? null;
+  if (modelUsed === null) {
+    const catalog = await fetchModels(routing.provider, apiKey);
+    if (catalog.ok) {
+      modelUsed = pickModelForTier(routing.tier, catalog.value);
+    }
+  }
+  if (modelUsed === null) {
+    modelUsed = routing.model;
+  }
+
   const systemPrompt =
     compressed.summary !== ''
       ? `${BASE_SYSTEM_PROMPT}\nCompressed context summary: ${compressed.summary}`
       : BASE_SYSTEM_PROMPT;
 
   const request: ExecutionRequest = {
-    model: routing.model,
+    model: modelUsed,
     systemPrompt,
     userPrompt: payload,
     apiKey,
   };
 
-  // 5) Eksekusi.
+  // 6) Eksekusi.
   const response = unwrap(await adapter.execute(request));
+
+  // 7) Catat pemakaian token (hanya eksekusi sukses).
+  const usage = recordUsage(routing.provider, routing.estimatedTokens);
 
   return {
     routing,
     compressed,
+    modelUsed,
     output: response.output,
     durationMs: Math.round(performance.now() - startedAt),
+    usageAfter: usage.totalTokens,
   };
 }
 
 /**
  * Boundary publik: tidak pernah throw.
- * Semua kegagalan dikembalikan sebagai Result.
+ * Semua kegagalan dikembalikan sebagai Result + tercatat di history.
  */
 export async function executeWorkflow(
   input: ExecutionInput,
 ): Promise<Result<ExecutionReport, Error>> {
   try {
-    return ok(await runPipeline(input));
+    const report = await runPipeline(input);
+    appendHistory({
+      provider: report.routing.provider,
+      tier: report.routing.tier,
+      estimatedTokens: report.routing.estimatedTokens,
+      durationMs: report.durationMs,
+      status: 'ok',
+      message: report.output.slice(0, 140),
+    });
+    return ok(report);
   } catch (error) {
-    return err(error instanceof Error ? error : new Error(String(error)));
+    const normalized = error instanceof Error ? error : new Error(String(error));
+    appendHistory({
+      status: 'error',
+      estimatedTokens: 0,
+      durationMs: 0,
+      message: normalized.message,
+    });
+    return err(normalized);
   }
 }

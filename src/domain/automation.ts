@@ -6,7 +6,7 @@
  */
 
 /** Provider AI/tool yang didukung. Extend union ini saat menambah integrasi. */
-export type ProviderId = 'local' | 'groq' | 'openai' | 'anthropic' | 'custom';
+export type ProviderId = 'local' | 'nvidia' | 'groq' | 'openai' | 'anthropic' | 'custom';
 
 /** Tier biaya — digunakan 9Router untuk memilih provider termurah yang mampu. */
 export type ProviderTier = 'cheap' | 'standard' | 'premium';

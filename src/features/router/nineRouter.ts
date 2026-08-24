@@ -25,7 +25,7 @@ export const DEFAULT_ROUTER_POLICY: RouterPolicy = {
   premiumMaxTokens: 16384,
 };
 
-/** Mapping tier -> provider/model. Ubah hanya di sini (DRY). */
+/** Fallback terakhir jika katalog model provider tidak terjangkau. */
 const TIER_TARGETS: Record<ProviderTier, { provider: ProviderId; model: string }> = {
   cheap: { provider: 'local', model: 'local-small' },
   standard: { provider: 'openai', model: 'gpt-4o-mini' },

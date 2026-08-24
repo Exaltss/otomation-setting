@@ -25,6 +25,7 @@ const CANARY_PLAINTEXT = 'otomation-vault-unlocked';
 
 export const PROVIDER_OPTIONS: ProviderId[] = [
   'local',
+  'nvidia',
   'groq',
   'openai',
   'anthropic',
