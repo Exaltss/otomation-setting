@@ -28,8 +28,8 @@ export const DEFAULT_ROUTER_POLICY: RouterPolicy = {
 /** Mapping tier -> provider/model. Ubah hanya di sini (DRY). */
 const TIER_TARGETS: Record<ProviderTier, { provider: ProviderId; model: string }> = {
   cheap: { provider: 'local', model: 'local-small' },
-  standard: { provider: 'groq', model: 'fast-small' },
-  premium: { provider: 'anthropic', model: 'premium-reasoning' },
+  standard: { provider: 'openai', model: 'gpt-4o-mini' },
+  premium: { provider: 'anthropic', model: 'claude-sonnet-4-5' },
 };
 
 /** Kata kunci yang menaikkan beban komputasi (tugas analitik/arsitektural). */

@@ -153,8 +153,13 @@ export async function saveApiKey(
   }
 }
 
-/** Dipakai execution engine (Fase 9) untuk mengambil key asli secara aman. */
+/** Dipakai execution engine untuk mengambil key asli secara aman. */
 export async function getApiKey(provider: ProviderId): Promise<Result<string, Error>> {
+  // Local mock tidak butuh credential dan tidak butuh vault terbuka.
+  if (provider === 'local') {
+    return ok('local');
+  }
+
   if (!masterKey) {
     return err(new Error('Vault is locked. Unlock it first.'));
   }
@@ -162,10 +167,6 @@ export async function getApiKey(provider: ProviderId): Promise<Result<string, Er
   const entry = readEntry(provider);
   if (!entry) {
     return err(new Error(`No credential stored for provider "${provider}".`));
-  }
-
-  if (provider === 'local') {
-    return ok('local');
   }
 
   try {

@@ -3,6 +3,7 @@ import { foldResult } from './core/result';
 import { useAppStore } from './features/workflow/store';
 import { Canvas } from './features/workflow/Canvas';
 import { CredentialPanel } from './features/credentials/CredentialPanel';
+import { ExecutionPanel } from './features/execution/ExecutionPanel';
 import { routeByNineRouter, type RouterPolicy } from './features/router/nineRouter';
 import { compressContext } from './features/context/compressedContext';
 import type { ContextMessage } from './domain/automation';
@@ -133,9 +134,14 @@ export default function App() {
         <Canvas />
       </section>
 
-      <section>
+      <section style={{ marginBottom: '20px' }}>
         <h2>API Key Management</h2>
         <CredentialPanel />
+      </section>
+
+      <section>
+        <h2>Execution</h2>
+        <ExecutionPanel />
       </section>
     </div>
   );

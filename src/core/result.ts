@@ -15,11 +15,8 @@ export const err = <E>(error: E): Result<never, E> => ({ ok: false, error });
 
 /**
  * Konsumsi Result dalam satu tempat (fold / catamorphism).
- *
- * Mengapa ada: sebagian konfigurasi TS language server gagal menarrow
- * discriminated union pada cabang false di JSX ternary. Helper ini
- * memusatkan konsumsi Result dengan satu assertion eksplisit,
- * sehingga semua call site kebal terhadap quirk tersebut.
+ * Memusatkan konsumsi Result dengan satu assertion eksplisit,
+ * sehingga call site kebal terhadap quirk narrowing TS.
  */
 export function foldResult<T, E, R>(
   result: Result<T, E>,
@@ -28,4 +25,19 @@ export function foldResult<T, E, R>(
 ): R {
   const boxed = result as { ok: boolean; value?: T; error?: E };
   return boxed.ok ? onOk(boxed.value as T) : onErr(boxed.error as E);
+}
+
+/**
+ * Ekstrak value atau throw error.
+ * HANYA untuk pipeline internal yang sudah dibungkus try/catch
+ * dan dikonversi kembali menjadi Result di boundary.
+ */
+export function unwrap<T, E>(result: Result<T, E>): T {
+  const boxed = result as { ok: boolean; value?: T; error?: E };
+  if (!boxed.ok) {
+    throw boxed.error instanceof Error
+      ? boxed.error
+      : new Error(String(boxed.error));
+  }
+  return boxed.value as T;
 }
