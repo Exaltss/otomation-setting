@@ -1,6 +1,6 @@
 /**
- * Server-side engine — port algoritma browser (9Router, kompresi, credit guard).
- * Sumber kebenaran eksekusi; zero dependency; persistensi JSON di server/data.
+ * Server-side engine — 9Router, kompresi, credit guard, multi-provider registry.
+ * Zero dependency; persistensi JSON di server/data.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -39,48 +39,71 @@ export function routeTier(input, policy = DEFAULT_POLICY) {
   return { tier, tokens };
 }
 
-const CHEAP_SIGNALS = ['nano', '4b', '8b', 'small', 'mini'];
+// ---------- multi-provider registry ----------
+/** Provider OpenAI-compatible yang dikenal (baseUrl default). */
+export const KNOWN_PROVIDER_BASE_URLS = {
+  nvidia: 'https://integrate.api.nvidia.com/v1',
+  openai: 'https://api.openai.com/v1',
+  groq: 'https://api.groq.com/openai/v1',
+  openrouter: 'https://openrouter.ai/api/v1',
+  local: 'http://localhost:11434/v1',
+};
+
+const CHEAP_SIGNALS = ['nano', '4b', '8b', 'small', 'mini', 'flash'];
 const PREMIUM_SIGNALS = ['ultra', '405b', '70b', 'nemotron', 'large'];
 
-/**
- * Model unggulan per tier (urutan = prioritas).
- * "Kalau ada": jika tidak ditemukan di katalog, lanjut ke prioritas berikutnya.
- */
-const PREFERRED_MODELS = {
-  cheap: ['stepfun-ai/step-3.7-flash', 'meta/llama-3.1-8b-instruct'],
-  standard: ['stepfun-ai/step-3.7-flash', 'meta/llama-3.1-8b-instruct'],
+/** Model unggulan (slug provider/model), urutan = prioritas "kalau ada". */
+const PREFERRED_SLUGS = {
+  cheap: [
+    'nvidia/stepfun-ai/step-3.7-flash',
+    'nvidia/meta/llama-3.1-8b-instruct',
+  ],
+  standard: [
+    'nvidia/stepfun-ai/step-3.7-flash',
+    'nvidia/meta/llama-3.1-8b-instruct',
+  ],
   premium: [
-    'nvidia/llama-3.1-nemotron-70b-instruct',
-    'meta/llama-3.3-70b-instruct',
+    'nvidia/nvidia/llama-3.1-nemotron-70b-instruct',
+    'nvidia/meta/llama-3.3-70b-instruct',
   ],
 };
 
-/** Buang prefix gaya FCC (nvidia_nim/) agar valid sebagai ID NVIDIA NIM. */
 export function normalizeModelId(id) {
   if (typeof id !== 'string') return id;
   return id.startsWith('nvidia_nim/') ? id.slice('nvidia_nim/'.length) : id;
 }
 
-export function pickModelForTier(tier, models) {
-  if (!models.length) return null;
-  const ids = models.map((m) => m.id);
-
-  // 1) Model unggulan yang terbukti stabil untuk chat.
-  for (const pref of PREFERRED_MODELS[tier] ?? []) {
-    if (ids.includes(pref)) return pref;
+/** Parse slug "provider/model". Jika prefix bukan provider dikenal -> provider null. */
+export function parseModelSlug(slug, providers) {
+  const cleaned = normalizeModelId(slug);
+  const first = String(cleaned).split('/')[0];
+  if ((providers ?? []).some((p) => p.id === first)) {
+    return { provider: first, model: String(cleaned).slice(first.length + 1) };
   }
-
-  // 2) Heuristik sinyal ukuran.
-  const signals = tier === 'premium' ? PREMIUM_SIGNALS : CHEAP_SIGNALS;
-  for (const s of signals) {
-    const hit = models.find((m) => m.id.toLowerCase().includes(s));
-    if (hit) return hit.id;
-  }
-
-  return models[0].id;
+  return { provider: null, model: cleaned };
 }
 
-/** Kompresi recency-bias 70/30 — identik dengan versi browser. */
+/**
+ * Pilih model dari katalog gabungan [{provider, id}].
+ * Mengembalikan slug "provider/model" atau null.
+ */
+export function pickModelForTier(tier, entries) {
+  if (!entries.length) return null;
+  const slugs = entries.map((e) => `${e.provider}/${e.id}`);
+
+  for (const pref of PREFERRED_SLUGS[tier] ?? []) {
+    if (slugs.includes(pref)) return pref;
+  }
+
+  const signals = tier === 'premium' ? PREMIUM_SIGNALS : CHEAP_SIGNALS;
+  for (const s of signals) {
+    const hit = entries.find((e) => e.id.toLowerCase().includes(s));
+    if (hit) return `${hit.provider}/${hit.id}`;
+  }
+
+  return slugs[0];
+}
+
 export function compressMessages(messages, maxTokens) {
   const sanitized = (messages ?? []).filter(
     (m) => m && typeof m.content === 'string' && m.content.trim().length > 0,
@@ -140,6 +163,31 @@ function writeJson(file, value) {
   writeFileSync(path.join(DATA_DIR, file), JSON.stringify(value, null, 2));
 }
 
+// ---------- keys (server-side secret store) ----------
+export function readKeys() {
+  return readJson('keys.json', {});
+}
+
+export function setKey(provider, key) {
+  const keys = readKeys();
+  keys[provider] = key;
+  writeJson('keys.json', keys);
+}
+
+export function getKey(provider) {
+  return readKeys()[provider] ?? null;
+}
+
+export function redactedKeys() {
+  return Object.entries(readKeys()).map(([provider, key]) => ({
+    provider,
+    redacted:
+      typeof key === 'string' && key.length > 8
+        ? `${key.slice(0, 4)}…${key.slice(-4)}`
+        : '********',
+  }));
+}
+
 // ---------- credit guard ----------
 function today() {
   return new Date().toISOString().slice(0, 10);
@@ -186,12 +234,22 @@ export function appendHistory(entry) {
   return next;
 }
 
-// ---------- config (Validate -> Apply) ----------
+// ---------- config ----------
 export const DEFAULT_CONFIG = {
-  model: 'stepfun-ai/step-3.7-flash',
+  model: 'nvidia/stepfun-ai/step-3.7-flash',
   tiers: { cheap: null, standard: null, premium: null },
   fallbackModels: [],
   creditLimitPerDay: 100000,
+  keepWarm: true,
+  keepWarmIntervalMs: 600000,
+  providers: [
+    { id: 'nvidia', baseUrl: KNOWN_PROVIDER_BASE_URLS.nvidia, enabled: true },
+    { id: 'openai', baseUrl: KNOWN_PROVIDER_BASE_URLS.openai, enabled: true },
+    { id: 'groq', baseUrl: KNOWN_PROVIDER_BASE_URLS.groq, enabled: false },
+    { id: 'openrouter', baseUrl: KNOWN_PROVIDER_BASE_URLS.openrouter, enabled: false },
+    { id: 'local', baseUrl: KNOWN_PROVIDER_BASE_URLS.local, enabled: false },
+  ],
+  tournament: { size: 3, reasoningMaxTokens: 256, maxRefineLoops: 2 },
 };
 
 export function readConfig() {
@@ -202,9 +260,10 @@ export function readConfig() {
         ...DEFAULT_CONFIG,
         ...cfg,
         tiers: { ...DEFAULT_CONFIG.tiers, ...(cfg.tiers ?? {}) },
+        providers: Array.isArray(cfg.providers) && cfg.providers.length > 0 ? cfg.providers : DEFAULT_CONFIG.providers,
+        tournament: { ...DEFAULT_CONFIG.tournament, ...(cfg.tournament ?? {}) },
       };
 
-  // Normalisasi ID model (buang prefix nvidia_nim/ gaya FCC).
   merged.model = normalizeModelId(merged.model);
   merged.fallbackModels = (merged.fallbackModels ?? []).map(normalizeModelId);
   for (const [key, value] of Object.entries(merged.tiers)) {
@@ -215,7 +274,6 @@ export function readConfig() {
   return merged;
 }
 
-/** Validasi hanya field yang dikirim (mendukung update parsial). */
 export function validateConfig(candidate) {
   const errors = [];
   if (
@@ -243,6 +301,26 @@ export function validateConfig(candidate) {
     (!Number.isFinite(candidate.creditLimitPerDay) || candidate.creditLimitPerDay <= 0)
   ) {
     errors.push('creditLimitPerDay must be a positive number');
+  }
+  if (candidate.keepWarm !== undefined && typeof candidate.keepWarm !== 'boolean') {
+    errors.push('keepWarm must be a boolean');
+  }
+  if (
+    candidate.keepWarmIntervalMs !== undefined &&
+    (!Number.isFinite(candidate.keepWarmIntervalMs) || candidate.keepWarmIntervalMs < 60000)
+  ) {
+    errors.push('keepWarmIntervalMs must be a number >= 60000');
+  }
+  if (candidate.providers !== undefined) {
+    if (!Array.isArray(candidate.providers)) {
+      errors.push('providers must be an array');
+    } else {
+      for (const p of candidate.providers) {
+        if (typeof p?.id !== 'string' || typeof p?.baseUrl !== 'string') {
+          errors.push('each provider needs string id and baseUrl');
+        }
+      }
+    }
   }
   return errors;
 }
