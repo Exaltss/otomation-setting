@@ -7,9 +7,19 @@ import {
   fetchStatus,
   postConfig,
   postKey,
-  type GatewayConfig,
   type StatusData,
 } from '../../services/gatewayClient';
+
+interface ProviderConfig {
+  id: string;
+  baseUrl: string;
+  enabled: boolean;
+}
+
+interface GatewayConfig {
+  providers: ProviderConfig[];
+  [key: string]: unknown;
+}
 
 export function ProvidersView() {
   const [status, setStatus] = useState<StatusData | null>(null);
@@ -23,7 +33,7 @@ export function ProvidersView() {
     Promise.all([fetchStatus(), fetchConfig()])
       .then(([s, c]) => {
         setStatus(s);
-        setConfig(c);
+        setConfig(c as unknown as GatewayConfig);
         setFailure(null);
       })
       .catch((e) => setFailure(String(e)));

@@ -1,6 +1,7 @@
 /**
- * otomation-setting AI Gateway — Fusion Tournament v3 (Fase 18).
- * Paralel + quorum, ensemble judge (median 3), task-aware prompts.
+ * otomation-setting AI Gateway — Fase 18B.
+ * Tournament paralel+quorum+ensemble judge + combo system:
+ * auto fusion semua provider / per provider / combo custom.
  */
 import { createServer } from 'node:http';
 import { existsSync, readFileSync } from 'node:fs';
@@ -27,6 +28,7 @@ import {
 } from './lib/engine.mjs';
 import { syntaxCheckCode, TOURNAMENT_DEFAULTS } from './lib/tournament.mjs';
 import { circuitStatus, clearBreaker, isBroken, tripBreaker } from './lib/circuit.mjs';
+import { createCombo, deleteCombo, getCombo, listCombos } from './lib/combo.mjs';
 
 const PORT = process.env.PORT ?? 4123;
 const PREMIUM_BUDGET = 16384;
@@ -66,7 +68,7 @@ function json(res, status, body) {
     'Content-Type': 'application/json',
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers': '*',
-    'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+    'Access-Control-Allow-Methods': 'GET,POST,DELETE,OPTIONS',
   });
   res.end(JSON.stringify(body));
 }
@@ -195,7 +197,6 @@ const median = (arr) => {
   return s[Math.floor(s.length / 2)];
 };
 
-// ---------- task-aware prompts (Point 8) ----------
 function reasoningPromptFor(taskType, payload) {
   const base = {
     coding: 'Plan the implementation step by step: choose approach, handle edge cases, note correctness checks. Output concise reasoning only.',
@@ -222,7 +223,6 @@ function execPromptFor(taskType, payload) {
   ];
 }
 
-/** Stream jawaban; kembalikan {content, reasoning} agar ada fallback. */
 async function streamCall(slug, messages, onDelta, { maxTokens = 1024 } = {}) {
   const cfg = readConfig();
   const { provider, model } = parseModelSlug(slug, cfg.providers);
@@ -278,7 +278,6 @@ async function streamCall(slug, messages, onDelta, { maxTokens = 1024 } = {}) {
   return { content: acc, reasoning: reasonAcc };
 }
 
-// ---------- classifier lokal ----------
 function classifyTaskLocal(text) {
   const t = String(text).toLowerCase();
   if (['kode', 'code', 'coding', 'fungsi', 'function', 'bug', 'script', 'regex', 'sql', 'python', 'javascript', 'typescript', 'refactor'].some((s) => t.includes(s))) return 'coding';
@@ -287,7 +286,7 @@ function classifyTaskLocal(text) {
   return 'general';
 }
 
-// ---------- TURNAMEN v3: paralel + quorum + ensemble judge ----------
+// ---------- TURNAMEN v3 + COMBO ----------
 async function handleTournamentStream(ctx, res) {
   const startedAt = Date.now();
   const cfg = ctx.cfg;
@@ -311,28 +310,36 @@ async function handleTournamentStream(ctx, res) {
     );
 
   const entries = await discoverAll(10000, true);
-  if (entries.length === 0) {
-    emit('tournament', { type: 'error', message: 'tidak ada provider aktif dengan API key' });
+
+  // ----- resolusi pool kandidat: combo > fusionProvider > semua -----
+  let baseSlugs;
+  let mode = 'all';
+  if (ctx.comboId) {
+    const combo = getCombo(ctx.comboId);
+    baseSlugs = combo ? combo.models : [];
+    mode = combo ? `combo:${combo.name}` : 'combo:missing';
+  } else if (ctx.fusionProvider) {
+    baseSlugs = entries
+      .filter((e) => e.provider === ctx.fusionProvider && CHAT_INCLUDE.test(e.id) && !CHAT_EXCLUDE.test(e.id))
+      .map((e) => `${e.provider}/${e.id}`);
+    mode = `fusion:${ctx.fusionProvider}`;
+  } else {
+    baseSlugs = entries
+      .filter((e) => CHAT_INCLUDE.test(e.id) && !CHAT_EXCLUDE.test(e.id))
+      .map((e) => `${e.provider}/${e.id}`);
+  }
+
+  const maxC = t.maxCandidates ?? 24;
+  const candidates = baseSlugs.filter((slug) => !isBroken(slug)).slice(0, maxC);
+
+  if (candidates.length === 0) {
+    emit('tournament', { type: 'error', message: `tidak ada kandidat untuk mode ${mode}` });
     res.write('data: [DONE]\n\n');
     res.end();
     return true;
   }
 
   const taskType = classifyTaskLocal(ctx.payload);
-
-  const maxC = t.maxCandidates ?? 24;
-  const candidates = entries
-    .filter((e) => CHAT_INCLUDE.test(e.id) && !CHAT_EXCLUDE.test(e.id))
-    .map((e) => `${e.provider}/${e.id}`)
-    .filter((slug) => !isBroken(slug))
-    .slice(0, maxC);
-
-  if (candidates.length === 0) {
-    emit('tournament', { type: 'error', message: 'tidak ada model chat-capable yang tersedia' });
-    res.write('data: [DONE]\n\n');
-    res.end();
-    return true;
-  }
 
   const projected = ctx.tokens + candidates.length * 100 + 2048;
   const guard = checkBudget(projected, cfg.creditLimitPerDay);
@@ -344,6 +351,7 @@ async function handleTournamentStream(ctx, res) {
   }
 
   const trace = {
+    mode,
     taskType,
     candidates,
     scores: [],
@@ -357,13 +365,13 @@ async function handleTournamentStream(ctx, res) {
     judges: [],
     quorumReached: false,
   };
-  emit('tournament', { type: 'fanout', taskType, candidates });
+  emit('tournament', { type: 'fanout', taskType, candidates, mode });
 
   const reasoningPrompt = reasoningPromptFor(taskType, ctx.payload);
 
-  // ----- 1) EVALUASI PARALEL + QUORUM (Point 1) -----
+  // ----- 1) evaluasi paralel + quorum -----
   const batchSize = Math.max(2, t.batchSize ?? 6);
-  const quorumTarget = Math.max(3, Math.ceil(candidates.length * (t.quorumRatio ?? 0.6)));
+  const quorumTarget = Math.max(1, Math.ceil(candidates.length * (t.quorumRatio ?? 0.6)));
   const collected = [];
   const doneSet = new Set();
   let okCount = 0;
@@ -483,10 +491,7 @@ async function handleTournamentStream(ctx, res) {
 
   const notStarted = queue.slice();
   const alive = collected.filter((r) => r.ok && r.reasoning.trim().length > 0);
-  trace.stragglers = [
-    ...collected.filter((r) => !r.ok).map((r) => r.slug),
-    ...notStarted,
-  ];
+  trace.stragglers = [...collected.filter((r) => !r.ok).map((r) => r.slug), ...notStarted];
   trace.reasoningText = alive.map((r) => `== ${r.slug} ==\n${r.reasoning}`).join('\n\n');
   emit('tournament', {
     type: 'quorum',
@@ -512,7 +517,7 @@ async function handleTournamentStream(ctx, res) {
     return true;
   }
 
-  // ----- 2) ENSEMBLE JUDGE (Point 2): 3 judge, median, tanpa self-judging -----
+  // ----- 2) ensemble judge -----
   const labels = alive.map((r, i) => `Source ${String.fromCharCode(65 + i)}`);
   trace.mapping = alive.map((r, i) => ({ label: labels[i], model: r.slug }));
   emit('tournament', { type: 'mapping', mapping: trace.mapping });
@@ -570,7 +575,7 @@ async function handleTournamentStream(ctx, res) {
   trace.winner = winner;
   emit('tournament', { type: 'winner', winner, synthesis: false });
 
-  // ----- 3) OUTPUT FINAL (task-aware exec prompt + fallback reasoning) -----
+  // ----- 3) output final -----
   let output = '';
   try {
     const r = await streamCall(winner, execPromptFor(taskType, ctx.payload), answerDelta);
@@ -581,7 +586,7 @@ async function handleTournamentStream(ctx, res) {
     if (output) answerDelta(output);
   }
 
-  // ----- 4) VALIDATION LOOP + REFINE -----
+  // ----- 4) validation + refine -----
   const validator = judgePool[0];
   for (let loop = 1; loop <= t.maxRefineLoops; loop += 1) {
     let pass = true;
@@ -684,6 +689,8 @@ function prepareChat(body) {
 
   const forced =
     typeof body.model === 'string' && body.model && body.model !== 'auto' ? body.model : null;
+  const fusionProvider = typeof body.fusionProvider === 'string' && body.fusionProvider ? body.fusionProvider : null;
+  const comboId = typeof body.comboId === 'string' && body.comboId ? body.comboId : null;
 
   const { tier, tokens } = routeTier(payload);
   if (tier === null) {
@@ -706,14 +713,11 @@ function prepareChat(body) {
 
   const compressed = compressMessages(incoming, PREMIUM_BUDGET);
   const finalMessages = compressed.summary
-    ? [
-        { role: 'system', content: `Compressed context summary: ${compressed.summary}` },
-        ...compressed.messages,
-      ]
+    ? [{ role: 'system', content: `Compressed context summary: ${compressed.summary}` }, ...compressed.messages]
     : compressed.messages;
 
   return {
-    ctx: { cfg, tier, tokens, override, primary, candidates, compressed, finalMessages, payload, forced },
+    ctx: { cfg, tier, tokens, override, primary, candidates, compressed, finalMessages, payload, forced, fusionProvider, comboId },
   };
 }
 
@@ -778,11 +782,7 @@ function buildSuccessBody(ctx, providerId, slug, choice, reasoning, content, dur
     model: slug,
     choices: [{
       index: 0,
-      message: {
-        role: 'assistant',
-        content,
-        ...(reasoning ? { reasoning_content: reasoning } : {}),
-      },
+      message: { role: 'assistant', content, ...(reasoning ? { reasoning_content: reasoning } : {}) },
       finish_reason: choice?.finish_reason ?? 'stop',
     }],
     usage: {
@@ -811,20 +811,12 @@ function buildSuccessBody(ctx, providerId, slug, choice, reasoning, content, dur
 
 async function handleBuffered(ctx, res) {
   const startedAt = Date.now();
-  const { providerId, slug, res: upstream, timer, lastError } = await resolveUpstream(
-    ctx.candidates,
-    ctx.finalMessages,
-    false,
-  );
+  const { providerId, slug, res: upstream, timer, lastError } = await resolveUpstream(ctx.candidates, ctx.finalMessages, false);
 
   if (!upstream) {
     appendHistory({
-      status: 'error',
-      provider: 'n/a',
-      model: ctx.primary,
-      tier: ctx.tier,
-      estimatedTokens: ctx.tokens,
-      durationMs: Date.now() - startedAt,
+      status: 'error', provider: 'n/a', model: ctx.primary, tier: ctx.tier,
+      estimatedTokens: ctx.tokens, durationMs: Date.now() - startedAt,
       message: String(lastError?.message ?? lastError),
     });
     json(res, 502, { error: { message: `All candidates failed: ${lastError?.message ?? lastError}` } });
@@ -845,20 +837,12 @@ async function handleBuffered(ctx, res) {
 
 async function handleStream(ctx, res) {
   const startedAt = Date.now();
-  const { providerId, slug, res: upstream, timer, lastError } = await resolveUpstream(
-    ctx.candidates,
-    ctx.finalMessages,
-    true,
-  );
+  const { providerId, slug, res: upstream, timer, lastError } = await resolveUpstream(ctx.candidates, ctx.finalMessages, true);
 
   if (!upstream) {
     appendHistory({
-      status: 'error',
-      provider: 'n/a',
-      model: ctx.primary,
-      tier: ctx.tier,
-      estimatedTokens: ctx.tokens,
-      durationMs: Date.now() - startedAt,
+      status: 'error', provider: 'n/a', model: ctx.primary, tier: ctx.tier,
+      estimatedTokens: ctx.tokens, durationMs: Date.now() - startedAt,
       message: String(lastError?.message ?? lastError),
     });
     json(res, 502, { error: { message: `All candidates failed: ${lastError?.message ?? lastError}` } });
@@ -918,31 +902,17 @@ async function handleStream(ctx, res) {
   warmSlug = slug;
   const usage = recordUsage(providerId, ctx.tokens);
   appendHistory({
-    status: 'ok',
-    provider: providerId,
-    model: slug,
-    tier: ctx.tier,
-    estimatedTokens: ctx.tokens,
-    durationMs,
-    message: (contentAcc || reasoningAcc).slice(0, 140),
+    status: 'ok', provider: providerId, model: slug, tier: ctx.tier,
+    estimatedTokens: ctx.tokens, durationMs, message: (contentAcc || reasoningAcc).slice(0, 140),
   });
 
   res.write(
     `event: otomation_trace\ndata: ${JSON.stringify({
-      tier: ctx.tier,
-      estimatedTokens: ctx.tokens,
-      modelUsed: slug,
-      providerUsed: providerId,
-      overrideUsed: ctx.override !== null || ctx.forced !== null,
-      fallbackUsed: slug !== ctx.primary,
-      compressedTokens: ctx.compressed.estimatedTokens,
-      droppedMessages: ctx.compressed.droppedMessages,
-      usageToday: usage.totalTokens,
-      durationMs,
-      isReasoningModel: reasoningAcc.length > 0,
-      reasoningTokens: estimateTokens(reasoningAcc),
-      contentTokens: estimateTokens(contentAcc),
-      streamSupported: true,
+      tier: ctx.tier, estimatedTokens: ctx.tokens, modelUsed: slug, providerUsed: providerId,
+      overrideUsed: ctx.override !== null || ctx.forced !== null, fallbackUsed: slug !== ctx.primary,
+      compressedTokens: ctx.compressed.estimatedTokens, droppedMessages: ctx.compressed.droppedMessages,
+      usageToday: usage.totalTokens, durationMs, isReasoningModel: reasoningAcc.length > 0,
+      reasoningTokens: estimateTokens(reasoningAcc), contentTokens: estimateTokens(contentAcc), streamSupported: true,
     })}\n\n`,
   );
   res.end();
@@ -968,7 +938,7 @@ setInterval(async () => {
     });
     clearTimeout(timer);
   } catch {
-    // keep-warm gagal = tidak fatal
+    // tidak fatal
   }
 }, 60000).unref();
 
@@ -983,10 +953,7 @@ const server = createServer(async (req, res) => {
   try {
     if (req.method === 'GET' && url.pathname === '/v1/models') {
       const entries = await discoverAll();
-      json(res, 200, {
-        object: 'list',
-        data: entries.map((e) => ({ id: `${e.provider}/${e.id}`, object: 'model' })),
-      });
+      json(res, 200, { object: 'list', data: entries.map((e) => ({ id: `${e.provider}/${e.id}`, object: 'model' })) });
       return;
     }
 
@@ -1025,6 +992,7 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    // ----- admin: config -----
     if (req.method === 'GET' && url.pathname === '/admin/api/config') {
       json(res, 200, readConfig());
       return;
@@ -1056,6 +1024,7 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    // ----- admin: keys -----
     if (req.method === 'GET' && url.pathname === '/admin/api/keys') {
       json(res, 200, { keys: redactedKeys() });
       return;
@@ -1080,6 +1049,38 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    // ----- admin: combos -----
+    if (req.method === 'GET' && url.pathname === '/admin/api/combos') {
+      json(res, 200, { combos: listCombos() });
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/admin/api/combos') {
+      const raw = await readBody(req);
+      let body;
+      try {
+        body = JSON.parse(raw);
+      } catch {
+        json(res, 400, { error: { message: 'invalid JSON body' } });
+        return;
+      }
+      const { name, models } = body ?? {};
+      if (typeof name !== 'string' || name.trim().length === 0 || !Array.isArray(models) || models.length === 0) {
+        json(res, 422, { error: { message: 'name and non-empty models array are required' } });
+        return;
+      }
+      json(res, 200, createCombo(name.trim(), models));
+      return;
+    }
+
+    if (req.method === 'DELETE' && url.pathname.startsWith('/admin/api/combos/')) {
+      const id = url.pathname.split('/').pop() ?? '';
+      deleteCombo(id);
+      json(res, 200, { ok: true });
+      return;
+    }
+
+    // ----- admin: status -----
     if (req.method === 'GET' && url.pathname === '/admin/api/status') {
       const cfg = readConfig();
       json(res, 200, {
@@ -1107,5 +1108,5 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`otomation-setting AI Gateway (Fase 18: parallel+quorum+ensemble) siap di http://localhost:${PORT}/v1`);
+  console.log(`otomation-setting AI Gateway (fusion + combo) siap di http://localhost:${PORT}/v1`);
 });
