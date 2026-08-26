@@ -1,16 +1,15 @@
 /**
- * Visual workflow canvas (DAG).
- * Pondasi node editor: trigger -> router -> compressor -> action.
- * Node dan edge dapat di-drag serta dihubungkan (connect).
+ * Workflow Canvas — demo DAG visual dengan React Flow.
+ * Self-contained: state nodes/edges internal, tanpa store eksternal.
  */
 import { useCallback } from 'react';
 import {
+  ReactFlow,
   Background,
   Controls,
-  ReactFlow,
   addEdge,
-  useEdgesState,
   useNodesState,
+  useEdgesState,
   type Connection,
   type Edge,
   type Node,
@@ -18,33 +17,16 @@ import {
 import '@xyflow/react/dist/style.css';
 
 const initialNodes: Node[] = [
-  {
-    id: 'trigger',
-    type: 'input',
-    position: { x: 0, y: 0 },
-    data: { label: 'Trigger: Webhook / Form' },
-  },
-  {
-    id: 'router',
-    position: { x: 280, y: 100 },
-    data: { label: '9Router: cost-aware routing' },
-  },
-  {
-    id: 'compressor',
-    position: { x: 560, y: 200 },
-    data: { label: 'Compressed Context' },
-  },
-  {
-    id: 'action',
-    position: { x: 840, y: 300 },
-    data: { label: 'Action: Email / API / DB' },
-  },
+  { id: 'trigger', type: 'default', position: { x: 40, y: 40 }, data: { label: 'Trigger: form masuk' } },
+  { id: 'condition', type: 'default', position: { x: 260, y: 120 }, data: { label: 'Condition: validasi email' } },
+  { id: 'action', type: 'default', position: { x: 480, y: 200 }, data: { label: 'Action: kirim email' } },
+  { id: 'output', type: 'default', position: { x: 700, y: 280 }, data: { label: 'Output: log hasil' } },
 ];
 
 const initialEdges: Edge[] = [
-  { id: 'trigger-router', source: 'trigger', target: 'router' },
-  { id: 'router-compressor', source: 'router', target: 'compressor' },
-  { id: 'compressor-action', source: 'compressor', target: 'action' },
+  { id: 'e1', source: 'trigger', target: 'condition' },
+  { id: 'e2', source: 'condition', target: 'action' },
+  { id: 'e3', source: 'action', target: 'output' },
 ];
 
 export function Canvas() {
@@ -52,12 +34,12 @@ export function Canvas() {
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
 
   const onConnect = useCallback(
-    (connection: Connection) => setEdges((currentEdges) => addEdge(connection, currentEdges)),
+    (conn: Connection) => setEdges((eds) => addEdge(conn, eds)),
     [setEdges],
   );
 
   return (
-    <div style={{ width: '100%', height: '420px', border: '1px solid #333', borderRadius: '8px' }}>
+    <div style={{ height: 420, border: '1px solid #333', borderRadius: 8, background: '#131314' }}>
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -65,6 +47,7 @@ export function Canvas() {
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
         fitView
+        colorMode="dark"
       >
         <Background />
         <Controls />
