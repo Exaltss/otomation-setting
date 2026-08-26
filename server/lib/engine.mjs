@@ -28,6 +28,10 @@ const HEAVY_KEYWORDS = [
   'database', 'program', 'aplikasi', 'application',
   'laravel', 'django', 'express', 'flask', 'fastapi',
   'full stack', 'full-stack', 'end-to-end',
+  // arsitektur & analisis teknis
+  'microservices', 'monolith', 'arsitektur', 'architecture',
+  'design pattern', 'scalability', 'performance', 'optimization',
+  'distributed system', 'load balancing', 'caching',
 ];
 
 const MAX_KEYWORDS = [
@@ -36,16 +40,17 @@ const MAX_KEYWORDS = [
   'aplikasi', 'application', 'program lengkap',
 ];
 
-/** EKSPORT: dipakai oleh tournament.mjs */
+/** EKSPORT: dipakai oleh tournament & gateway */
 export function estimateTokens(text) {
   if (!text) return 0;
   return Math.max(1, Math.ceil(text.length / 4));
 }
 
-function classifyTask(text) {
+/** EKSPORT: dipakai oleh gateway (konsolidasi dari 3 versi lama) */
+export function classifyTask(text) {
   const t = String(text).toLowerCase();
   if (['kode', 'code', 'coding', 'fungsi', 'function', 'bug', 'script', 'regex', 'sql', 'python', 'javascript', 'typescript', 'refactor', 'laravel', 'program'].some((s) => t.includes(s))) return 'coding';
-  if (['analisis', 'analysis', 'mengapa', 'why', 'bandingkan', 'compare', 'strategi', 'rumus', 'matematika', 'hitung'].some((s) => t.includes(s))) return 'reasoning';
+  if (['analisis', 'analysis', 'mengapa', 'why', 'bandingkan', 'compare', 'strategi', 'rumus', 'matematika', 'hitung', 'microservices', 'monolith', 'arsitektur', 'architecture'].some((s) => t.includes(s))) return 'reasoning';
   if (['tulis', 'write', 'artikel', 'essay', 'email', 'ringkas', 'summarize', 'terjemah', 'translate'].some((s) => t.includes(s))) return 'writing';
   return 'general';
 }
@@ -64,7 +69,7 @@ export function routeTier(input, policy = DEFAULT_POLICY) {
   if (taskType === 'coding') {
     if (maxWorthy) forcedTier = 'max';
     else if (heavy) forcedTier = 'high';
-    else forcedTier = 'high';
+    else forcedTier = 'high'; // coding selalu minimal high (output kode panjang)
   } else if (taskType === 'reasoning' && heavy) {
     forcedTier = 'high';
   } else if (taskType === 'writing' && maxWorthy) {

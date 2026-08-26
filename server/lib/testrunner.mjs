@@ -55,3 +55,33 @@ export function runJsTests(code, { timeoutMs = 5000 } = {}) {
     }
   }
 }
+
+/**
+ * Syntax check untuk code block (dipakai oleh gateway untuk validation loop).
+ * Migrasi dari tournament.mjs (yang sudah dihapus).
+ */
+export function syntaxCheckCode(output) {
+  const fences = [...String(output).matchAll(/```(?:js|javascript|typescript|ts|node)\n([\s\S]*?)```/gi)];
+  const problems = [];
+  fences.forEach((f, i) => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'otom-'));
+    const file = path.join(dir, `check-${i}.js`);
+    try {
+      writeFileSync(file, f[1]);
+      const result = spawnSync('node', ['--check', file], { encoding: 'utf8' });
+      if (result.status !== 0) {
+        problems.push(`block ${i + 1}: ${String(result.stderr).slice(0, 200)}`);
+      }
+    } catch (e) {
+      problems.push(`block ${i + 1}: ${String(e.message).slice(0, 200)}`);
+    } finally {
+      try {
+        unlinkSync(file);
+        rmdirSync(dir);
+      } catch {
+        // abaikan
+      }
+    }
+  });
+  return problems;
+}

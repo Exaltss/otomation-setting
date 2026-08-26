@@ -1,6 +1,7 @@
 /**
- * otomation-setting AI Gateway — Fase 19 + tier standart/high/max.
- * Jawaban tidak terpotong: max_tokens besar sesuai tier.
+ * otomation-setting AI Gateway — Fase 19 + refactor bersih.
+ * Tournament paralel+quorum+ensemble judge, semantic cache,
+ * testrunner, task-aware routing standart/high/max.
  */
 import { createServer } from 'node:http';
 import { existsSync, readFileSync } from 'node:fs';
@@ -10,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import {
   appendHistory,
   checkBudget,
+  classifyTask,
   compressMessages,
   estimateTokens,
   getKey,
@@ -25,15 +27,27 @@ import {
   validateConfig,
   writeConfig,
 } from './lib/engine.mjs';
-import { syntaxCheckCode, TOURNAMENT_DEFAULTS } from './lib/tournament.mjs';
+import { extractJsBlocks, runJsTests, syntaxCheckCode } from './lib/testrunner.mjs';
 import { circuitStatus, clearBreaker, isBroken, tripBreaker } from './lib/circuit.mjs';
 import { createCombo, deleteCombo, getCombo, listCombos } from './lib/combo.mjs';
 import { cacheClear, cacheGet, cachePut, cacheStats } from './lib/cache.mjs';
-import { extractJsBlocks, runJsTests } from './lib/testrunner.mjs';
 import { listChats, removeChat, upsertChat } from './lib/chats.mjs';
 
 const PORT = process.env.PORT ?? 4123;
 const PREMIUM_BUDGET = 16384;
+
+const TOURNAMENT_DEFAULTS = {
+  enabled: true,
+  size: 3,
+  reasoningMaxTokens: 256,
+  maxRefineLoops: 2,
+  judge: null,
+  quorumMs: 30000,
+  batchSize: 6,
+  quorumRatio: 0.6,
+  maxJudged: 8,
+  maxCandidates: 24,
+};
 
 /** Limit jawaban per tier — kode panjang tidak terpotong. */
 const ANSWER_MAX_TOKENS = { standart: 4096, high: 8192, max: 16384 };
@@ -283,14 +297,6 @@ async function streamCall(slug, messages, onDelta, { maxTokens = 4096 } = {}) {
   return { content: acc, reasoning: reasonAcc };
 }
 
-function classifyTaskLocal(text) {
-  const t = String(text).toLowerCase();
-  if (['kode', 'code', 'coding', 'fungsi', 'function', 'bug', 'script', 'regex', 'sql', 'python', 'javascript', 'typescript', 'refactor', 'laravel', 'program'].some((s) => t.includes(s))) return 'coding';
-  if (['analisis', 'analysis', 'mengapa', 'why', 'bandingkan', 'compare', 'strategi', 'rumus', 'matematika', 'hitung'].some((s) => t.includes(s))) return 'reasoning';
-  if (['tulis', 'write', 'artikel', 'essay', 'email', 'ringkas', 'summarize', 'terjemah', 'translate'].some((s) => t.includes(s))) return 'writing';
-  return 'general';
-}
-
 // ---------- TURNAMEN + CACHE + TESTRUNNER ----------
 async function handleTournamentStream(ctx, res) {
   const startedAt = Date.now();
@@ -382,7 +388,8 @@ async function handleTournamentStream(ctx, res) {
     return true;
   }
 
-  const taskType = classifyTaskLocal(ctx.payload);
+  // task-aware dari engine (konsolidasi)
+  const { taskType } = routeTier(ctx.payload);
 
   const projected = ctx.tokens + candidates.length * 100 + 2048;
   const guard = checkBudget(projected, cfg.creditLimitPerDay);
@@ -558,7 +565,7 @@ async function handleTournamentStream(ctx, res) {
     return true;
   }
 
-  // ----- 2) ensemble judge (dari tier max) -----
+  // ----- 2) ensemble judge -----
   const labels = alive.map((r, i) => `Source ${String.fromCharCode(65 + i)}`);
   trace.mapping = alive.map((r, i) => ({ label: labels[i], model: r.slug }));
   emit('tournament', { type: 'mapping', mapping: trace.mapping });
@@ -616,7 +623,7 @@ async function handleTournamentStream(ctx, res) {
   trace.winner = winner;
   emit('tournament', { type: 'winner', winner, synthesis: false });
 
-  // ----- 3) output final (max_tokens besar sesuai tier) -----
+  // ----- 3) output final -----
   let output = '';
   try {
     const r = await streamCall(winner, execPromptFor(taskType, ctx.payload), answerDelta, { maxTokens: answerMax });
@@ -1215,5 +1222,5 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`otomation-setting AI Gateway (tier standart/high/max) siap di http://localhost:${PORT}/v1`);
+  console.log(`otomation-setting AI Gateway (refactored: clean imports + task-aware routing) siap di http://localhost:${PORT}/v1`);
 });
