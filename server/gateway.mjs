@@ -1,9 +1,10 @@
 /**
- * otomation-setting AI Gateway — Fase 20 FINAL: Genius Frugal Mode.
+ * otomation-setting AI Gateway — Fase 21: Genius Frugal Mode + Workflow Engine.
  * - Pintar maksimal: ensemble judge + tool-verified + sampling presisi
  * - Zero halusinasi: temp rendah, wajib tool untuk math/fakta, anti-hallucination rules
  * - Hemat: trivial early-exit, cache, reasoning pendek, skip validation tool-verified
  * - Robust: timeout 5 menit untuk coding, retry ETIMEDOUT, anti-truncation + silent compliance
+ * - Workflow: DAG runner eksekutabel via POST /v1/workflow/execute
  */
 import { createServer } from 'node:http';
 import { existsSync, readFileSync } from 'node:fs';
@@ -34,6 +35,7 @@ import { createCombo, deleteCombo, getCombo, listCombos } from './lib/combo.mjs'
 import { cacheClear, cacheGet, cachePut, cacheStats } from './lib/cache.mjs';
 import { listChats, removeChat, upsertChat } from './lib/chats.mjs';
 import { executeToolCall } from './lib/tools.mjs';
+import { executeWorkflow } from './lib/workflow.mjs';
 
 const PORT = process.env.PORT ?? 4123;
 const PREMIUM_BUDGET = 16384;
@@ -251,6 +253,21 @@ async function callModel(slug, messages, { maxTokens = 512, sampling = null } = 
 }
 
 let warmSlug = null;
+
+/**
+ * Helper untuk workflow engine: call model via gateway internal logic.
+ * 'auto' → warmSlug (model pemenang terakhir) atau cfg.model.
+ */
+async function gatewayCallModel(modelSlug, messages) {
+  const cfg = readConfig();
+  const slug =
+    modelSlug && modelSlug !== 'auto'
+      ? modelSlug
+      : warmSlug && !isBroken(warmSlug)
+        ? warmSlug
+        : cfg.model;
+  return callModel(slug, messages, { maxTokens: 4096, sampling: SAMPLING.reasoningFinal });
+}
 
 function parseScoreText(text) {
   const s = String(text);
@@ -1395,6 +1412,43 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    // ----- Workflow Execution (Fase 21) -----
+    if (req.method === 'POST' && url.pathname === '/v1/workflow/execute') {
+      const raw = await readBody(req);
+      let body;
+      try {
+        body = JSON.parse(raw);
+      } catch {
+        json(res, 400, { error: { message: 'invalid JSON body' } });
+        return;
+      }
+
+      const { nodes, edges } = body;
+      if (!Array.isArray(nodes) || !Array.isArray(edges)) {
+        json(res, 400, { error: { message: 'nodes and edges arrays are required' } });
+        return;
+      }
+
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+        'Access-Control-Allow-Origin': '*',
+      });
+
+      const emit = (data) => res.write(`event: workflow\ndata: ${JSON.stringify(data)}\n\n`);
+
+      try {
+        await executeWorkflow(nodes, edges, emit, gatewayCallModel);
+      } catch (e) {
+        emit({ type: 'error', error: String(e?.message ?? e) });
+      }
+
+      res.write('data: [DONE]\n\n');
+      res.end();
+      return;
+    }
+
     if (req.method === 'GET' && url.pathname === '/admin/api/config') {
       json(res, 200, readConfig());
       return;
@@ -1549,5 +1603,5 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`otomation-setting AI Gateway (Genius Frugal Mode + silent compliance) siap di http://localhost:${PORT}/v1`);
+  console.log(`otomation-setting AI Gateway (Fase 21: Genius Frugal + Workflow Engine) siap di http://localhost:${PORT}/v1`);
 });
