@@ -1,7 +1,6 @@
 /**
- * otomation-setting AI Gateway — Fase 18B.
- * Tournament paralel+quorum+ensemble judge + combo system:
- * auto fusion semua provider / per provider / combo custom.
+ * otomation-setting AI Gateway — Fase 19 + tier standart/high/max.
+ * Jawaban tidak terpotong: max_tokens besar sesuai tier.
  */
 import { createServer } from 'node:http';
 import { existsSync, readFileSync } from 'node:fs';
@@ -29,9 +28,15 @@ import {
 import { syntaxCheckCode, TOURNAMENT_DEFAULTS } from './lib/tournament.mjs';
 import { circuitStatus, clearBreaker, isBroken, tripBreaker } from './lib/circuit.mjs';
 import { createCombo, deleteCombo, getCombo, listCombos } from './lib/combo.mjs';
+import { cacheClear, cacheGet, cachePut, cacheStats } from './lib/cache.mjs';
+import { extractJsBlocks, runJsTests } from './lib/testrunner.mjs';
+import { listChats, removeChat, upsertChat } from './lib/chats.mjs';
 
 const PORT = process.env.PORT ?? 4123;
 const PREMIUM_BUDGET = 16384;
+
+/** Limit jawaban per tier — kode panjang tidak terpotong. */
+const ANSWER_MAX_TOKENS = { standart: 4096, high: 8192, max: 16384 };
 
 const CHAT_INCLUDE = /(instruct|chat|flash|lite|mini|nemotron|coder|codestral|devstral|step-|llama|gemma|mistral|mixtral|qwen|phi-|dbrx|deepseek|yi-large|kimi|command-r|starcode|granite|codegemma|jamba|sea-lion|zamba|hermes|openchat|orca|vicuna|dolphin|nous)/i;
 const CHAT_EXCLUDE = /(embed|guard|fuyu|llava|vision|-vl|recurrent|diffusion|transcribe|whisper|audio|speech|sdxl|stable|video|retrieval|rerank|moderation|safety|neva|prompt-|steerlm|reward|ranker|bge-|e5-|deploit|tts|clip|lamini)/i;
@@ -117,7 +122,7 @@ async function discoverAll(timeoutMs = 10000, forceRefresh = false) {
 }
 
 // ---------- fetch upstream ----------
-async function fetchUpstream(providerCfg, apiKey, model, messages, { timeoutMs = 120000, maxTokens = 512, stream = false } = {}) {
+async function fetchUpstream(providerCfg, apiKey, model, messages, { timeoutMs = 120000, maxTokens = 4096, stream = false } = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -212,7 +217,7 @@ function reasoningPromptFor(taskType, payload) {
 
 function execPromptFor(taskType, payload) {
   const sys = {
-    coding: 'Produce ONLY the final complete code in a fenced code block plus a short usage example. No reasoning.',
+    coding: 'Produce ONLY the final complete code in a fenced code block plus a short usage example. No reasoning. Complete the full code, do not truncate.',
     reasoning: 'Produce ONLY the final answer with clear concise steps and the final result highlighted. No extra commentary.',
     writing: 'Produce ONLY the final text, in the same language as the request. No reasoning.',
     general: 'Produce ONLY the final complete answer. No reasoning.',
@@ -223,7 +228,7 @@ function execPromptFor(taskType, payload) {
   ];
 }
 
-async function streamCall(slug, messages, onDelta, { maxTokens = 1024 } = {}) {
+async function streamCall(slug, messages, onDelta, { maxTokens = 4096 } = {}) {
   const cfg = readConfig();
   const { provider, model } = parseModelSlug(slug, cfg.providers);
   const providerId = provider ?? 'nvidia';
@@ -235,7 +240,7 @@ async function streamCall(slug, messages, onDelta, { maxTokens = 1024 } = {}) {
   const { res: up, timer } = await fetchUpstream(providerCfg, apiKey, model, messages, {
     stream: true,
     maxTokens,
-    timeoutMs: 120000,
+    timeoutMs: 180000,
   });
   if (!up.ok) {
     clearTimeout(timer);
@@ -280,17 +285,18 @@ async function streamCall(slug, messages, onDelta, { maxTokens = 1024 } = {}) {
 
 function classifyTaskLocal(text) {
   const t = String(text).toLowerCase();
-  if (['kode', 'code', 'coding', 'fungsi', 'function', 'bug', 'script', 'regex', 'sql', 'python', 'javascript', 'typescript', 'refactor'].some((s) => t.includes(s))) return 'coding';
+  if (['kode', 'code', 'coding', 'fungsi', 'function', 'bug', 'script', 'regex', 'sql', 'python', 'javascript', 'typescript', 'refactor', 'laravel', 'program'].some((s) => t.includes(s))) return 'coding';
   if (['analisis', 'analysis', 'mengapa', 'why', 'bandingkan', 'compare', 'strategi', 'rumus', 'matematika', 'hitung'].some((s) => t.includes(s))) return 'reasoning';
   if (['tulis', 'write', 'artikel', 'essay', 'email', 'ringkas', 'summarize', 'terjemah', 'translate'].some((s) => t.includes(s))) return 'writing';
   return 'general';
 }
 
-// ---------- TURNAMEN v3 + COMBO ----------
+// ---------- TURNAMEN + CACHE + TESTRUNNER ----------
 async function handleTournamentStream(ctx, res) {
   const startedAt = Date.now();
   const cfg = ctx.cfg;
   const t = { ...TOURNAMENT_DEFAULTS, ...(cfg.tournament ?? {}) };
+  const answerMax = ANSWER_MAX_TOKENS[ctx.tier] ?? 4096;
 
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -309,9 +315,46 @@ async function handleTournamentStream(ctx, res) {
       })}\n\n`,
     );
 
+  // ----- 0) SEMANTIC CACHE -----
+  if (!ctx.noCache) {
+    const cached = cacheGet(ctx.payload);
+    if (cached) {
+      console.log(`[cache] HIT (${cached.fuzzy ? 'fuzzy' : 'exact'}) age=${Math.round(cached.ageMs / 1000)}s`);
+      emit('tournament', { type: 'cache', hit: true, fuzzy: cached.fuzzy, source: cached.value.modelUsed });
+      const content = cached.value.content ?? '';
+      const chunkSize = 24;
+      for (let i = 0; i < content.length; i += chunkSize) {
+        answerDelta(content.slice(i, i + chunkSize));
+      }
+      const durationMs = Date.now() - startedAt;
+      appendHistory({
+        status: 'ok',
+        provider: cached.value.providerUsed ?? 'cache',
+        model: cached.value.modelUsed ?? 'cache',
+        tier: ctx.tier,
+        estimatedTokens: 0,
+        durationMs,
+        message: content.slice(0, 140),
+        tournament: { cacheHit: true },
+      });
+      emit('otomation_trace', {
+        tier: ctx.tier,
+        estimatedTokens: 0,
+        modelUsed: cached.value.modelUsed ?? 'cache',
+        providerUsed: cached.value.providerUsed ?? 'cache',
+        durationMs,
+        cacheHit: true,
+        cacheFuzzy: cached.fuzzy,
+      });
+      res.write('data: [DONE]\n\n');
+      res.end();
+      return true;
+    }
+    console.log('[cache] miss');
+  }
+
   const entries = await discoverAll(10000, true);
 
-  // ----- resolusi pool kandidat: combo > fusionProvider > semua -----
   let baseSlugs;
   let mode = 'all';
   if (ctx.comboId) {
@@ -364,6 +407,7 @@ async function handleTournamentStream(ctx, res) {
     mapping: [],
     judges: [],
     quorumReached: false,
+    tests: [],
   };
   emit('tournament', { type: 'fanout', taskType, candidates, mode });
 
@@ -373,7 +417,6 @@ async function handleTournamentStream(ctx, res) {
   const batchSize = Math.max(2, t.batchSize ?? 6);
   const quorumTarget = Math.max(1, Math.ceil(candidates.length * (t.quorumRatio ?? 0.6)));
   const collected = [];
-  const doneSet = new Set();
   let okCount = 0;
   let startedCount = 0;
   let stop = false;
@@ -388,7 +431,6 @@ async function handleTournamentStream(ctx, res) {
     if (!providerCfg || !providerCfg.enabled || !apiKey) {
       const msg = `provider "${providerId}" unavailable`;
       collected.push({ slug, ok: false, error: msg });
-      doneSet.add(slug);
       emit('tournament', { type: 'candidate-done', slug, ok: false, error: msg });
       return;
     }
@@ -452,7 +494,6 @@ async function handleTournamentStream(ctx, res) {
       }
     }
 
-    doneSet.add(slug);
     if (lastErr) {
       if (lastErr.status !== 429) tripBreaker(slug);
       const msg = String(lastErr?.message ?? lastErr);
@@ -517,12 +558,12 @@ async function handleTournamentStream(ctx, res) {
     return true;
   }
 
-  // ----- 2) ensemble judge -----
+  // ----- 2) ensemble judge (dari tier max) -----
   const labels = alive.map((r, i) => `Source ${String.fromCharCode(65 + i)}`);
   trace.mapping = alive.map((r, i) => ({ label: labels[i], model: r.slug }));
   emit('tournament', { type: 'mapping', mapping: trace.mapping });
 
-  const premPick = pickModelForTier('premium', entries);
+  const premPick = pickModelForTier('max', entries);
   const judgePool = [];
   if (alive.some((r) => r.slug === premPick)) judgePool.push(premPick);
   for (const r of alive) {
@@ -575,10 +616,10 @@ async function handleTournamentStream(ctx, res) {
   trace.winner = winner;
   emit('tournament', { type: 'winner', winner, synthesis: false });
 
-  // ----- 3) output final -----
+  // ----- 3) output final (max_tokens besar sesuai tier) -----
   let output = '';
   try {
-    const r = await streamCall(winner, execPromptFor(taskType, ctx.payload), answerDelta);
+    const r = await streamCall(winner, execPromptFor(taskType, ctx.payload), answerDelta, { maxTokens: answerMax });
     output = r.content || r.reasoning || '';
     if (!r.content && r.reasoning) answerDelta(r.reasoning);
   } catch {
@@ -586,18 +627,29 @@ async function handleTournamentStream(ctx, res) {
     if (output) answerDelta(output);
   }
 
-  // ----- 4) validation + refine -----
+  // ----- 4) validation + TESTRUNNER + refine -----
   const validator = judgePool[0];
   for (let loop = 1; loop <= t.maxRefineLoops; loop += 1) {
     let pass = true;
     const issues = [];
 
     if (taskType === 'coding') {
-      const problems = syntaxCheckCode(output);
-      if (problems.length > 0) {
-        pass = false;
-        issues.push(`syntax: ${problems.join(' | ')}`);
+      const blocks = extractJsBlocks(output);
+      for (let bi = 0; bi < blocks.length; bi += 1) {
+        const r = runJsTests(blocks[bi]);
+        trace.tests.push({ block: bi + 1, ...r });
+        console.log(`[testrunner] block ${bi + 1}:`, r);
+        if (!r.syntaxOk) {
+          pass = false;
+          issues.push(`block ${bi + 1} syntax: ${r.stderr}`);
+        } else if (r.ran && r.execOk === false) {
+          pass = false;
+          issues.push(`block ${bi + 1} runtime: ${r.stderr || 'exit non-zero'}`);
+        }
       }
+      const passed = trace.tests.filter((x) => x.execOk === true).length;
+      const skipped = trace.tests.filter((x) => x.execOk === null).length;
+      trace.validation.push(`tests: ${passed}/${trace.tests.length} passed, ${skipped} skipped`);
     }
 
     try {
@@ -605,7 +657,7 @@ async function handleTournamentStream(ctx, res) {
         {
           role: 'system',
           content:
-            'Validate: efficient, well-structured, error-free, fully addresses the task. Reply: VERDICT:YES or VERDICT:NO then ISSUES:<text>.',
+            'Validate: efficient, well-structured, error-free, fully addresses the task, code complete and not truncated. Reply: VERDICT:YES or VERDICT:NO then ISSUES:<text>.',
         },
         { role: 'user', content: `TASK:\n${ctx.payload}\n\nANSWER:\n${output}` },
       ], { maxTokens: 128 });
@@ -631,8 +683,8 @@ async function handleTournamentStream(ctx, res) {
       const r = await streamCall(winner, [
         ...execPromptFor(taskType, ctx.payload),
         { role: 'assistant', content: output },
-        { role: 'user', content: `Improve the answer. Fix these issues: ${issues.join('; ')}. Output ONLY the improved answer.` },
-      ], answerDelta, { maxTokens: 1024 });
+        { role: 'user', content: `Improve the answer. Fix these issues: ${issues.join('; ')}. Output ONLY the improved COMPLETE answer, do not truncate.` },
+      ], answerDelta, { maxTokens: answerMax });
       output = r.content || r.reasoning || output;
       if (!r.content && r.reasoning) answerDelta(r.reasoning);
     } catch {
@@ -644,6 +696,14 @@ async function handleTournamentStream(ctx, res) {
   warmSlug = winner;
   const winnerProvider = parseModelSlug(winner, cfg.providers).provider ?? 'nvidia';
   const usage = recordUsage(winnerProvider, ctx.tokens);
+
+  cachePut(ctx.payload, {
+    content: output,
+    modelUsed: winner,
+    providerUsed: winnerProvider,
+  });
+  console.log('[cache] stored');
+
   appendHistory({
     status: 'ok',
     provider: winnerProvider,
@@ -665,6 +725,7 @@ async function handleTournamentStream(ctx, res) {
     usageToday: usage.totalTokens,
     durationMs,
     isReasoningModel: true,
+    cacheHit: false,
     tournament: trace,
   });
   res.write('data: [DONE]\n\n');
@@ -691,6 +752,7 @@ function prepareChat(body) {
     typeof body.model === 'string' && body.model && body.model !== 'auto' ? body.model : null;
   const fusionProvider = typeof body.fusionProvider === 'string' && body.fusionProvider ? body.fusionProvider : null;
   const comboId = typeof body.comboId === 'string' && body.comboId ? body.comboId : null;
+  const noCache = body.noCache === true;
 
   const { tier, tokens } = routeTier(payload);
   if (tier === null) {
@@ -717,11 +779,11 @@ function prepareChat(body) {
     : compressed.messages;
 
   return {
-    ctx: { cfg, tier, tokens, override, primary, candidates, compressed, finalMessages, payload, forced, fusionProvider, comboId },
+    ctx: { cfg, tier, tokens, override, primary, candidates, compressed, finalMessages, payload, forced, fusionProvider, comboId, noCache },
   };
 }
 
-async function resolveUpstream(candidates, finalMessages, stream) {
+async function resolveUpstream(candidates, finalMessages, stream, maxTokens) {
   const cfg = readConfig();
   let lastError = null;
 
@@ -739,7 +801,7 @@ async function resolveUpstream(candidates, finalMessages, stream) {
     let slugSucceeded = false;
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       try {
-        const { res, timer } = await fetchUpstream(providerCfg, apiKey, model, finalMessages, { stream });
+        const { res, timer } = await fetchUpstream(providerCfg, apiKey, model, finalMessages, { stream, maxTokens });
         if (!res.ok) {
           clearTimeout(timer);
           const data = await res.json().catch(() => ({}));
@@ -811,7 +873,8 @@ function buildSuccessBody(ctx, providerId, slug, choice, reasoning, content, dur
 
 async function handleBuffered(ctx, res) {
   const startedAt = Date.now();
-  const { providerId, slug, res: upstream, timer, lastError } = await resolveUpstream(ctx.candidates, ctx.finalMessages, false);
+  const answerMax = ANSWER_MAX_TOKENS[ctx.tier] ?? 4096;
+  const { providerId, slug, res: upstream, timer, lastError } = await resolveUpstream(ctx.candidates, ctx.finalMessages, false, answerMax);
 
   if (!upstream) {
     appendHistory({
@@ -837,7 +900,8 @@ async function handleBuffered(ctx, res) {
 
 async function handleStream(ctx, res) {
   const startedAt = Date.now();
-  const { providerId, slug, res: upstream, timer, lastError } = await resolveUpstream(ctx.candidates, ctx.finalMessages, true);
+  const answerMax = ANSWER_MAX_TOKENS[ctx.tier] ?? 4096;
+  const { providerId, slug, res: upstream, timer, lastError } = await resolveUpstream(ctx.candidates, ctx.finalMessages, true, answerMax);
 
   if (!upstream) {
     appendHistory({
@@ -1080,6 +1144,48 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    // ----- admin: cache -----
+    if (req.method === 'GET' && url.pathname === '/admin/api/cache') {
+      json(res, 200, cacheStats());
+      return;
+    }
+
+    if (req.method === 'DELETE' && url.pathname === '/admin/api/cache') {
+      cacheClear();
+      json(res, 200, { ok: true });
+      return;
+    }
+
+    // ----- admin: chats -----
+    if (req.method === 'GET' && url.pathname === '/admin/api/chats') {
+      json(res, 200, { chats: listChats() });
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/admin/api/chats') {
+      const raw = await readBody(req);
+      let chat;
+      try {
+        chat = JSON.parse(raw);
+      } catch {
+        json(res, 400, { error: { message: 'invalid JSON body' } });
+        return;
+      }
+      if (typeof chat?.id !== 'string' || !Array.isArray(chat?.messages)) {
+        json(res, 422, { error: { message: 'chat.id and chat.messages are required' } });
+        return;
+      }
+      json(res, 200, upsertChat(chat));
+      return;
+    }
+
+    if (req.method === 'DELETE' && url.pathname.startsWith('/admin/api/chats/')) {
+      const id = url.pathname.split('/').pop() ?? '';
+      removeChat(id);
+      json(res, 200, { ok: true });
+      return;
+    }
+
     // ----- admin: status -----
     if (req.method === 'GET' && url.pathname === '/admin/api/status') {
       const cfg = readConfig();
@@ -1090,6 +1196,7 @@ const server = createServer(async (req, res) => {
         warmModel: warmSlug,
         keys: redactedKeys(),
         circuit: circuitStatus(),
+        cache: cacheStats(),
         providers: cfg.providers.map((p) => ({
           id: p.id,
           baseUrl: p.baseUrl,
@@ -1108,5 +1215,5 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`otomation-setting AI Gateway (fusion + combo) siap di http://localhost:${PORT}/v1`);
+  console.log(`otomation-setting AI Gateway (tier standart/high/max) siap di http://localhost:${PORT}/v1`);
 });

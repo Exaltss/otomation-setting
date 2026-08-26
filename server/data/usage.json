@@ -1,8 +1,7 @@
 {
-  "date": "2026-08-25",
-  "totalTokens": 78,
+  "date": "2026-08-26",
+  "totalTokens": 5333,
   "perProvider": {
-    "nvidia": 68,
-    "openrouter": 10
+    "nvidia": 5333
   }
 }

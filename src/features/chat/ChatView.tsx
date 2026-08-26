@@ -1,7 +1,6 @@
 /**
- * Chat UI gaya Gemini: greeting tengah saat kosong, input pill,
- * model selector combo, thinking panel samping live,
- * jawaban dirender sebagai markdown (code block rapi).
+ * Chat UI gaya Gemini/Qwen: jawaban bersih (markdown + code block ber-header),
+ * detail seleksi hanya di panel 🧠, bukan di bubble.
  */
 import { useEffect, useRef, useState } from 'react';
 import {
@@ -20,11 +19,6 @@ interface LastTrace {
   tournament?: TournamentTrace;
   durationMs?: number;
   modelUsed?: string;
-}
-
-function short(slug: string): string {
-  const m = slug.split('/').slice(1).join('/');
-  return m.length > 26 ? `${m.slice(0, 26)}…` : m;
 }
 
 export function ChatView({ chatsApi }: { chatsApi: ChatsApi }) {
@@ -137,7 +131,10 @@ export function ChatView({ chatsApi }: { chatsApi: ChatsApi }) {
           }
           if (!trimmed.startsWith('data:')) continue;
           const payload = trimmed.slice(5).trim();
-          if (payload === '[DONE]') continue;
+          if (payload === '[DONE]') {
+            currentEvent = '';
+            continue;
+          }
 
           let data: Record<string, unknown>;
           try {
@@ -201,6 +198,7 @@ export function ChatView({ chatsApi }: { chatsApi: ChatsApi }) {
             finalTrace = data as unknown as ChatTrace;
             setLastTrace(finalTrace as LastTrace);
           } else {
+            // default: delta jawaban final
             const choices = data.choices as Array<{ delta?: { content?: string } }> | undefined;
             const delta = choices?.[0]?.delta;
             if (typeof delta?.content === 'string') {
@@ -208,6 +206,9 @@ export function ChatView({ chatsApi }: { chatsApi: ChatsApi }) {
               setLive({ ...acc });
             }
           }
+
+          // FIX: reset event setelah tiap data (sesuai语义 SSE per-event)
+          currentEvent = '';
         }
       }
 
@@ -221,10 +222,6 @@ export function ChatView({ chatsApi }: { chatsApi: ChatsApi }) {
             id: crypto.randomUUID(),
             role: 'assistant',
             content: finalContent,
-            reasoning:
-              Object.values(acc.reasoning).length > 0
-                ? Object.values(acc.reasoning).join('\n---\n')
-                : undefined,
             trace: finalTrace,
             failed: Boolean(acc.errorMsg),
           },
@@ -303,27 +300,7 @@ export function ChatView({ chatsApi }: { chatsApi: ChatsApi }) {
                   {m.role === 'user' ? (
                     <div className="bubble">{m.content}</div>
                   ) : (
-                    <>
-                      <Markdown content={m.content} />
-                      {m.trace?.tournament && (
-                        <details className="g-trace">
-                          <summary>🧠 proses seleksi AI</summary>
-                          <div style={{ marginTop: 6 }}>
-                            mode: {m.trace.tournament.mode ?? 'all'} · tugas:{' '}
-                            {m.trace.tournament.taskType} · kandidat:{' '}
-                            {(m.trace.tournament.candidates ?? []).length} · pemenang:{' '}
-                            {m.trace.tournament.winner ? short(m.trace.tournament.winner) : '-'} ·
-                            validasi: {(m.trace.tournament.validation ?? []).join(' → ') || '-'}
-                          </div>
-                        </details>
-                      )}
-                      {m.reasoning && (
-                        <details className="g-trace">
-                          <summary>reasoning mentah</summary>
-                          <pre className="g-raw">{m.reasoning}</pre>
-                        </details>
-                      )}
-                    </>
+                    <Markdown content={m.content} />
                   )}
                 </div>
               ))}

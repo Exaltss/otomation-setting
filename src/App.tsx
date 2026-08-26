@@ -11,29 +11,41 @@ import './styles/gemini.css';
 
 export default function App() {
   const [view, setView] = useState<ViewId>('chat');
+  const [sideOpen, setSideOpen] = useState(false);
   const chatsApi = useChats();
+
+  const navigate = (v: ViewId) => {
+    setView(v);
+    setSideOpen(false);
+  };
 
   return (
     <div className="g-app">
+      <button className="g-burger" onClick={() => setSideOpen((o) => !o)} title="menu">
+        ☰
+      </button>
+      {sideOpen && <div className="g-backdrop show" onClick={() => setSideOpen(false)} />}
+
       <Sidebar
+        open={sideOpen}
         view={view}
-        onNavigate={setView}
+        onNavigate={navigate}
         chats={chatsApi.chats}
         activeId={chatsApi.activeId}
         onSelectChat={(id) => {
           chatsApi.setActiveId(id);
-          setView('chat');
+          navigate('chat');
         }}
         onNewChat={() => {
           chatsApi.newChat();
-          setView('chat');
+          navigate('chat');
         }}
         onDeleteChat={chatsApi.deleteChat}
       />
 
-      {view === 'chat' && <ChatView chatsApi={chatsApi} />}
-
-      {view !== 'chat' && (
+      {view === 'chat' ? (
+        <ChatView chatsApi={chatsApi} />
+      ) : (
         <main className="g-view">
           {view === 'providers' && <ProvidersView />}
           {view === 'quota' && <QuotaView />}

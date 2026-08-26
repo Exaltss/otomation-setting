@@ -1,6 +1,7 @@
 /**
  * Server-side engine — 9Router, kompresi, credit guard, multi-provider registry.
- * Zero dependency; persistensi JSON di server/data.
+ * Tier baru: standart / high / max (cheap dihapus).
+ * Routing task-aware: coding kompleks otomatis ke tier tinggi.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -10,61 +11,105 @@ import { fileURLToPath } from 'node:url';
 const DATA_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data');
 
 export const DEFAULT_POLICY = {
-  cheapMaxTokens: 512,
-  standardMaxTokens: 4096,
-  premiumMaxTokens: 16384,
+  standartMaxTokens: 4096,
+  highMaxTokens: 8192,
+  maxMaxTokens: 16384,
 };
 
 const COMPLEXITY_KEYWORDS = [
   'analisis', 'analysis', 'reasoning', 'audit',
   'arsitek', 'architect', 'strategi', 'strategy', 'refactor',
 ];
-const COMPLEXITY_BONUS = 1000;
 
+const HEAVY_KEYWORDS = [
+  'lengkap', 'complete', 'full', 'penuh',
+  'CRUD', 'crud', 'create read update delete',
+  'migrasi', 'migration', 'controller', 'model',
+  'database', 'program', 'aplikasi', 'application',
+  'laravel', 'django', 'express', 'flask', 'fastapi',
+  'full stack', 'full-stack', 'end-to-end',
+];
+
+const MAX_KEYWORDS = [
+  'lengkap', 'complete', 'full', 'CRUD', 'crud',
+  'laravel', 'django', 'full stack', 'full-stack',
+  'aplikasi', 'application', 'program lengkap',
+];
+
+/** EKSPORT: dipakai oleh tournament.mjs */
 export function estimateTokens(text) {
   if (!text) return 0;
   return Math.max(1, Math.ceil(text.length / 4));
 }
 
-export function routeTier(input, policy = DEFAULT_POLICY) {
-  const normalized = String(input).toLowerCase();
-  const complex = COMPLEXITY_KEYWORDS.some((k) => normalized.includes(k));
-  const tokens = estimateTokens(input) + (complex ? COMPLEXITY_BONUS : 0);
-
-  let tier = null;
-  if (tokens <= policy.cheapMaxTokens) tier = 'cheap';
-  else if (tokens <= policy.standardMaxTokens) tier = 'standard';
-  else if (tokens <= policy.premiumMaxTokens) tier = 'premium';
-
-  return { tier, tokens };
+function classifyTask(text) {
+  const t = String(text).toLowerCase();
+  if (['kode', 'code', 'coding', 'fungsi', 'function', 'bug', 'script', 'regex', 'sql', 'python', 'javascript', 'typescript', 'refactor', 'laravel', 'program'].some((s) => t.includes(s))) return 'coding';
+  if (['analisis', 'analysis', 'mengapa', 'why', 'bandingkan', 'compare', 'strategi', 'rumus', 'matematika', 'hitung'].some((s) => t.includes(s))) return 'reasoning';
+  if (['tulis', 'write', 'artikel', 'essay', 'email', 'ringkas', 'summarize', 'terjemah', 'translate'].some((s) => t.includes(s))) return 'writing';
+  return 'general';
 }
 
-// ---------- multi-provider registry ----------
-/** Provider OpenAI-compatible yang dikenal (baseUrl default). */
-export const KNOWN_PROVIDER_BASE_URLS = {
-  nvidia: 'https://integrate.api.nvidia.com/v1',
-  openai: 'https://api.openai.com/v1',
-  groq: 'https://api.groq.com/openai/v1',
-  openrouter: 'https://openrouter.ai/api/v1',
-  local: 'http://localhost:11434/v1',
-};
+export function routeTier(input, policy = DEFAULT_POLICY) {
+  const normalized = String(input).toLowerCase();
+  const taskType = classifyTask(input);
+  const complex = COMPLEXITY_KEYWORDS.some((k) => normalized.includes(k));
+  const heavy = HEAVY_KEYWORDS.some((k) => normalized.toLowerCase().includes(k));
+  const maxWorthy = MAX_KEYWORDS.some((k) => normalized.toLowerCase().includes(k));
+
+  let tokens = estimateTokens(input) + (complex ? 1000 : 0);
+
+  // TASK-AWARE OVERRIDE: coding kompleks → paksa ke high/max
+  let forcedTier = null;
+  if (taskType === 'coding') {
+    if (maxWorthy) forcedTier = 'max';
+    else if (heavy) forcedTier = 'high';
+    else forcedTier = 'high';
+  } else if (taskType === 'reasoning' && heavy) {
+    forcedTier = 'high';
+  } else if (taskType === 'writing' && maxWorthy) {
+    forcedTier = 'high';
+  }
+
+  let tier = null;
+  if (forcedTier) {
+    tier = forcedTier;
+  } else if (tokens <= policy.standartMaxTokens) {
+    tier = 'standart';
+  } else if (tokens <= policy.highMaxTokens) {
+    tier = 'high';
+  } else if (tokens <= policy.maxMaxTokens) {
+    tier = 'max';
+  }
+
+  return { tier, tokens, taskType, forced: !!forcedTier };
+}
+
+export function parseModelSlug(slug, providers = []) {
+  const parts = String(slug).split('/');
+  if (parts.length < 2) return { provider: null, model: slug };
+  const known = providers.some((p) => p.id === parts[0]);
+  if (known || parts.length >= 2) {
+    return { provider: parts[0], model: parts.slice(1).join('/') };
+  }
+  return { provider: null, model: slug };
+}
 
 const CHEAP_SIGNALS = ['nano', '4b', '8b', 'small', 'mini', 'flash'];
 const PREMIUM_SIGNALS = ['ultra', '405b', '70b', 'nemotron', 'large'];
 
-/** Model unggulan (slug provider/model), urutan = prioritas "kalau ada". */
 const PREFERRED_SLUGS = {
-  cheap: [
-    'nvidia/stepfun-ai/step-3.7-flash',
+  standart: [
     'nvidia/meta/llama-3.1-8b-instruct',
+    'nvidia/meta/llama-3.1-70b-instruct',
   ],
-  standard: [
-    'nvidia/stepfun-ai/step-3.7-flash',
-    'nvidia/meta/llama-3.1-8b-instruct',
-  ],
-  premium: [
-    'nvidia/nvidia/llama-3.1-nemotron-70b-instruct',
+  high: [
+    'nvidia/meta/llama-3.1-70b-instruct',
     'nvidia/meta/llama-3.3-70b-instruct',
+  ],
+  max: [
+    'nvidia/meta/llama-3.3-70b-instruct',
+    'nvidia/nvidia/llama-3.1-nemotron-70b-instruct',
   ],
 };
 
@@ -73,20 +118,6 @@ export function normalizeModelId(id) {
   return id.startsWith('nvidia_nim/') ? id.slice('nvidia_nim/'.length) : id;
 }
 
-/** Parse slug "provider/model". Jika prefix bukan provider dikenal -> provider null. */
-export function parseModelSlug(slug, providers) {
-  const cleaned = normalizeModelId(slug);
-  const first = String(cleaned).split('/')[0];
-  if ((providers ?? []).some((p) => p.id === first)) {
-    return { provider: first, model: String(cleaned).slice(first.length + 1) };
-  }
-  return { provider: null, model: cleaned };
-}
-
-/**
- * Pilih model dari katalog gabungan [{provider, id}].
- * Mengembalikan slug "provider/model" atau null.
- */
 export function pickModelForTier(tier, entries) {
   if (!entries.length) return null;
   const slugs = entries.map((e) => `${e.provider}/${e.id}`);
@@ -95,7 +126,7 @@ export function pickModelForTier(tier, entries) {
     if (slugs.includes(pref)) return pref;
   }
 
-  const signals = tier === 'premium' ? PREMIUM_SIGNALS : CHEAP_SIGNALS;
+  const signals = tier === 'standart' ? CHEAP_SIGNALS : PREMIUM_SIGNALS;
   for (const s of signals) {
     const hit = entries.find((e) => e.id.toLowerCase().includes(s));
     if (hit) return `${hit.provider}/${hit.id}`;
@@ -142,7 +173,6 @@ export function compressMessages(messages, maxTokens) {
   };
 }
 
-// ---------- persistensi ----------
 function ensureDataDir() {
   if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
 }
@@ -163,7 +193,6 @@ function writeJson(file, value) {
   writeFileSync(path.join(DATA_DIR, file), JSON.stringify(value, null, 2));
 }
 
-// ---------- keys (server-side secret store) ----------
 export function readKeys() {
   return readJson('keys.json', {});
 }
@@ -188,7 +217,6 @@ export function redactedKeys() {
   }));
 }
 
-// ---------- credit guard ----------
 function today() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -222,7 +250,6 @@ export function recordUsage(provider, tokens) {
   return next;
 }
 
-// ---------- history ----------
 export function readHistory() {
   return readJson('history.json', []);
 }
@@ -234,20 +261,19 @@ export function appendHistory(entry) {
   return next;
 }
 
-// ---------- config ----------
 export const DEFAULT_CONFIG = {
-  model: 'nvidia/stepfun-ai/step-3.7-flash',
-  tiers: { cheap: null, standard: null, premium: null },
+  model: 'nvidia/meta/llama-3.1-70b-instruct',
+  tiers: { standart: null, high: null, max: null },
   fallbackModels: [],
   creditLimitPerDay: 100000,
   keepWarm: true,
   keepWarmIntervalMs: 600000,
   providers: [
-    { id: 'nvidia', baseUrl: KNOWN_PROVIDER_BASE_URLS.nvidia, enabled: true },
-    { id: 'openai', baseUrl: KNOWN_PROVIDER_BASE_URLS.openai, enabled: true },
-    { id: 'groq', baseUrl: KNOWN_PROVIDER_BASE_URLS.groq, enabled: false },
-    { id: 'openrouter', baseUrl: KNOWN_PROVIDER_BASE_URLS.openrouter, enabled: false },
-    { id: 'local', baseUrl: KNOWN_PROVIDER_BASE_URLS.local, enabled: false },
+    { id: 'nvidia', baseUrl: 'https://integrate.api.nvidia.com/v1', enabled: true },
+    { id: 'openai', baseUrl: 'https://api.openai.com/v1', enabled: true },
+    { id: 'groq', baseUrl: 'https://api.groq.com/openai/v1', enabled: false },
+    { id: 'openrouter', baseUrl: 'https://openrouter.ai/api/v1', enabled: false },
+    { id: 'local', baseUrl: 'http://localhost:11434/v1', enabled: false },
   ],
   tournament: { size: 3, reasoningMaxTokens: 256, maxRefineLoops: 2 },
 };

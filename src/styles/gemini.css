@@ -62,10 +62,7 @@ body {
 .g-navitem:hover { background: var(--g-hover); }
 .g-navitem.active { background: var(--g-hover); }
 
-.g-sidelabel {
-  padding: 14px 22px 6px 22px;
-  font-size: 12px; color: var(--g-dim);
-}
+.g-sidelabel { padding: 14px 22px 6px 22px; font-size: 12px; color: var(--g-dim); }
 
 .g-recents { flex: 1; overflow-y: auto; }
 
@@ -126,17 +123,7 @@ body {
 .g-cursor { color: var(--g-accent); animation: blink 1s steps(2) infinite; }
 @keyframes blink { 50% { opacity: 0; } }
 
-.g-trace { margin-top: 10px; font-size: 12px; color: var(--g-dim); }
-.g-trace summary { cursor: pointer; }
-.g-raw {
-  background: var(--g-code-bg); border: 1px solid var(--g-border);
-  border-radius: 8px; padding: 10px; overflow-x: auto;
-  white-space: pre-wrap; text-align: left;
-  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
-  font-size: 12px;
-}
-
-/* ===== Markdown (gaya chat modern) ===== */
+/* ===== Markdown (gaya Qwen) ===== */
 .md { text-align: left; }
 .md > *:first-child { margin-top: 0; }
 .md p { margin: 0 0 12px 0; }
@@ -157,21 +144,6 @@ body {
   font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
   font-size: 13px;
 }
-.md pre {
-  background: var(--g-code-bg);
-  border: 1px solid var(--g-border);
-  border-radius: 10px;
-  padding: 14px 16px;
-  overflow-x: auto;
-  margin: 0 0 14px 0;
-}
-.md pre code {
-  background: transparent;
-  padding: 0;
-  font-size: 13px;
-  line-height: 1.6;
-  white-space: pre;
-}
 .md blockquote {
   border-left: 3px solid var(--g-border);
   margin: 0 0 12px 0;
@@ -190,6 +162,34 @@ body {
 .md a:hover { text-decoration: underline; }
 .md hr { border: none; border-top: 1px solid var(--g-border); margin: 18px 0; }
 .md img { max-width: 100%; border-radius: 8px; }
+
+/* code block dengan header bar (label bahasa + tombol salin) */
+.md-code {
+  border: 1px solid var(--g-border);
+  border-radius: 10px;
+  margin: 0 0 14px 0;
+  overflow: hidden;
+  background: var(--g-code-bg);
+}
+.md-code-head {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 7px 12px;
+  background: var(--g-hover);
+  font-size: 12px; color: var(--g-dim);
+}
+.md-code-head button {
+  background: none; border: none; color: var(--g-dim);
+  cursor: pointer; font-size: 12px;
+}
+.md-code-head button:hover { color: var(--g-text); }
+.md-code pre {
+  margin: 0; border: none; border-radius: 0;
+  background: transparent; padding: 12px 14px; overflow-x: auto;
+}
+.md-code pre code {
+  background: transparent; padding: 0;
+  font-size: 13px; line-height: 1.6; white-space: pre;
+}
 
 /* input pill */
 .g-inputwrap { padding: 0 24px 20px 24px; }

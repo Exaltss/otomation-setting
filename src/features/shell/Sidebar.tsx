@@ -1,11 +1,13 @@
 /**
  * Sidebar gaya Gemini: logo, chat baru, navigasi, recents.
+ * Responsive: off-canvas di layar kecil (prop open).
  */
 import type { Chat } from '../../services/chatStore';
 
 export type ViewId = 'chat' | 'providers' | 'quota' | 'stats' | 'settings' | 'tools';
 
 interface SidebarProps {
+  open: boolean;
   view: ViewId;
   onNavigate: (v: ViewId) => void;
   chats: Chat[];
@@ -23,9 +25,18 @@ const NAV: { id: ViewId; icon: string; label: string }[] = [
   { id: 'tools', icon: '🧪', label: 'Alat' },
 ];
 
-export function Sidebar({ view, onNavigate, chats, activeId, onSelectChat, onNewChat, onDeleteChat }: SidebarProps) {
+export function Sidebar({
+  open,
+  view,
+  onNavigate,
+  chats,
+  activeId,
+  onSelectChat,
+  onNewChat,
+  onDeleteChat,
+}: SidebarProps) {
   return (
-    <aside className="g-side">
+    <aside className={`g-side ${open ? 'open' : ''}`}>
       <div className="g-logo">
         <span className="spark">✦</span> Otomation Setting
       </div>
@@ -54,7 +65,14 @@ export function Sidebar({ view, onNavigate, chats, activeId, onSelectChat, onNew
         {chats.map((c) => (
           <div key={c.id} className={`g-recent ${activeId === c.id ? 'active' : ''}`}>
             <button
-              style={{ all: 'unset', flex: 1, cursor: 'pointer', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+              style={{
+                all: 'unset',
+                flex: 1,
+                cursor: 'pointer',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
               onClick={() => onSelectChat(c.id)}
             >
               {c.title}

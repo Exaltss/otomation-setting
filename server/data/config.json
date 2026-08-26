@@ -1,9 +1,9 @@
 {
-  "model": "nvidia/stepfun-ai/step-3.7-flash",
+  "model": "nvidia/meta/llama-3.1-70b-instruct",
   "tiers": {
-    "cheap": null,
-    "standard": null,
-    "premium": null
+    "standart": null,
+    "high": null,
+    "max": null
   },
   "fallbackModels": [],
   "creditLimitPerDay": 100000,
@@ -23,12 +23,12 @@
     {
       "id": "groq",
       "baseUrl": "https://api.groq.com/openai/v1",
-      "enabled": true
+      "enabled": false
     },
     {
       "id": "openrouter",
       "baseUrl": "https://openrouter.ai/api/v1",
-      "enabled": true
+      "enabled": false
     },
     {
       "id": "local",
