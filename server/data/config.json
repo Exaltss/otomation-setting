@@ -1,5 +1,5 @@
 {
-  "model": "nvidia/meta/llama-3.1-70b-instruct",
+  "model": "nvidia/nvidia/nemotron-3-super-120b-a12b",
   "tiers": {
     "standart": null,
     "high": null,
@@ -23,7 +23,7 @@
     {
       "id": "groq",
       "baseUrl": "https://api.groq.com/openai/v1",
-      "enabled": false
+      "enabled": true
     },
     {
       "id": "openrouter",

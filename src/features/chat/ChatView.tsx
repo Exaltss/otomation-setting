@@ -1,6 +1,7 @@
 /**
- * Chat UI gaya Gemini/Qwen: jawaban bersih (markdown + code block ber-header),
- * detail seleksi hanya di panel 🧠, bukan di bubble.
+ * Chat UI gaya Gemini: greeting tengah saat kosong, input pill,
+ * model selector combo, thinking panel samping live,
+ * markdown rendering, dan indikator tool calls (Fase 20).
  */
 import { useEffect, useRef, useState } from 'react';
 import {
@@ -15,8 +16,14 @@ import { ModelSelector } from './ModelSelector';
 import { ThinkingPanel, type LiveState } from './ThinkingPanel';
 import { Markdown } from './Markdown';
 
+interface ToolCallEntry {
+  name: string;
+  params?: unknown;
+  result?: unknown;
+}
+
 interface LastTrace {
-  tournament?: TournamentTrace;
+  tournament?: TournamentTrace & { toolCalls?: ToolCallEntry[] };
   durationMs?: number;
   modelUsed?: string;
 }
@@ -190,6 +197,22 @@ export function ChatView({ chatsApi }: { chatsApi: ChatsApi }) {
             if (data.type === 'error') {
               acc.errorMsg = String(data.message ?? 'terjadi kesalahan turnamen');
             }
+            // ----- TOOL CALLS (Fase 20) -----
+            if (data.type === 'tool_call') {
+              acc.tournament.toolCalls = [
+                ...(acc.tournament.toolCalls ?? []),
+                { name: String(data.name ?? ''), params: data.params },
+              ];
+            }
+            if (data.type === 'tool_result') {
+              const list = acc.tournament.toolCalls ?? [];
+              const idx = list.findIndex((tc) => tc.name === String(data.name ?? '') && tc.result === undefined);
+              if (idx >= 0) {
+                const updated = [...list];
+                updated[idx] = { ...updated[idx], result: data.result };
+                acc.tournament.toolCalls = updated;
+              }
+            }
             setLive({ ...acc, tournament: { ...acc.tournament } });
           } else if (currentEvent === 'answer_reset') {
             acc.content = '';
@@ -207,7 +230,7 @@ export function ChatView({ chatsApi }: { chatsApi: ChatsApi }) {
             }
           }
 
-          // FIX: reset event setelah tiap data (sesuai语义 SSE per-event)
+          // reset event setelah tiap data
           currentEvent = '';
         }
       }

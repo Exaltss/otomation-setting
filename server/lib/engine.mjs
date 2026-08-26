@@ -1,7 +1,7 @@
 /**
  * Server-side engine — 9Router, kompresi, credit guard, multi-provider registry.
- * Tier baru: standart / high / max (cheap dihapus).
- * Routing task-aware: coding kompleks otomatis ke tier tinggi.
+ * Tier: standart / high / max. Routing task-aware.
+ * Model default: nvidia/nvidia/nemotron-3-super-120b-a12b.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -28,7 +28,6 @@ const HEAVY_KEYWORDS = [
   'database', 'program', 'aplikasi', 'application',
   'laravel', 'django', 'express', 'flask', 'fastapi',
   'full stack', 'full-stack', 'end-to-end',
-  // arsitektur & analisis teknis
   'microservices', 'monolith', 'arsitektur', 'architecture',
   'design pattern', 'scalability', 'performance', 'optimization',
   'distributed system', 'load balancing', 'caching',
@@ -46,7 +45,7 @@ export function estimateTokens(text) {
   return Math.max(1, Math.ceil(text.length / 4));
 }
 
-/** EKSPORT: dipakai oleh gateway (konsolidasi dari 3 versi lama) */
+/** EKSPORT: klasifikasi tugas (konsolidasi dari 3 versi lama) */
 export function classifyTask(text) {
   const t = String(text).toLowerCase();
   if (['kode', 'code', 'coding', 'fungsi', 'function', 'bug', 'script', 'regex', 'sql', 'python', 'javascript', 'typescript', 'refactor', 'laravel', 'program'].some((s) => t.includes(s))) return 'coding';
@@ -101,7 +100,7 @@ export function parseModelSlug(slug, providers = []) {
 }
 
 const CHEAP_SIGNALS = ['nano', '4b', '8b', 'small', 'mini', 'flash'];
-const PREMIUM_SIGNALS = ['ultra', '405b', '70b', 'nemotron', 'large'];
+const PREMIUM_SIGNALS = ['ultra', '405b', '70b', 'nemotron', 'large', 'super'];
 
 const PREFERRED_SLUGS = {
   standart: [
@@ -113,6 +112,7 @@ const PREFERRED_SLUGS = {
     'nvidia/meta/llama-3.3-70b-instruct',
   ],
   max: [
+    'nvidia/nvidia/nemotron-3-super-120b-a12b',
     'nvidia/meta/llama-3.3-70b-instruct',
     'nvidia/nvidia/llama-3.1-nemotron-70b-instruct',
   ],
@@ -267,7 +267,7 @@ export function appendHistory(entry) {
 }
 
 export const DEFAULT_CONFIG = {
-  model: 'nvidia/meta/llama-3.1-70b-instruct',
+  model: 'nvidia/nvidia/nemotron-3-super-120b-a12b',
   tiers: { standart: null, high: null, max: null },
   fallbackModels: [],
   creditLimitPerDay: 100000,
@@ -276,7 +276,7 @@ export const DEFAULT_CONFIG = {
   providers: [
     { id: 'nvidia', baseUrl: 'https://integrate.api.nvidia.com/v1', enabled: true },
     { id: 'openai', baseUrl: 'https://api.openai.com/v1', enabled: true },
-    { id: 'groq', baseUrl: 'https://api.groq.com/openai/v1', enabled: false },
+    { id: 'groq', baseUrl: 'https://api.groq.com/openai/v1', enabled: true },
     { id: 'openrouter', baseUrl: 'https://openrouter.ai/api/v1', enabled: false },
     { id: 'local', baseUrl: 'http://localhost:11434/v1', enabled: false },
   ],

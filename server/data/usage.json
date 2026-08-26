@@ -1,7 +1,8 @@
 {
   "date": "2026-08-26",
-  "totalTokens": 5333,
+  "totalTokens": 5666,
   "perProvider": {
-    "nvidia": 5333
+    "nvidia": 5404,
+    "groq": 262
   }
 }

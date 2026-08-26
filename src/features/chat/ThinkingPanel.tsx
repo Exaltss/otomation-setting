@@ -1,8 +1,5 @@
 /**
- * Thinking panel gaya Qwen: langkah-langkah berpikir berurutan
- * (✓ done / ● active / ○ pending) dengan detail yang bisa di-expand.
- * - openSteps: derived state via useMemo (tidak setState di effect)
- * - auto-scroll: DOM effect (akses ref, bukan setState)
+ * Thinking panel gaya Qwen dengan indikator tool calls.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { TournamentTrace } from '../../services/gatewayClient';
@@ -10,12 +7,16 @@ import type { TournamentTrace } from '../../services/gatewayClient';
 export interface LiveState {
   content: string;
   reasoning: Record<string, string>;
-  tournament: TournamentTrace & { progress?: { index: number; total: number; slug: string } };
+  tournament: TournamentTrace & {
+    progress?: { index: number; total: number; slug: string };
+    toolCalls?: Array<{ name: string; params?: unknown; result?: unknown }>;
+    toolResults?: Array<{ name: string; result?: unknown }>;
+  };
   errorMsg?: string;
 }
 
 interface LastTrace {
-  tournament?: TournamentTrace;
+  tournament?: TournamentTrace & { toolCalls?: Array<{ name: string }> };
   durationMs?: number;
   modelUsed?: string;
 }
@@ -41,16 +42,13 @@ function short(slug: string): string {
 }
 
 export function ThinkingPanel({ live, lastTrace, onClose }: ThinkingPanelProps) {
-  // langkah yang dibuka secara manual oleh user (klik toggle)
   const [manualOpen, setManualOpen] = useState<Set<string>>(new Set());
-  // langkah yang ditutup secara manual (untuk override auto-expand aktif)
   const [manualClosed, setManualClosed] = useState<Set<string>>(new Set());
   const bodyRef = useRef<HTMLDivElement | null>(null);
 
   const t = live?.tournament;
   const idle = live === null;
 
-  // ---------- susun langkah dari state live / trace terakhir ----------
   const steps: Step[] = useMemo(() => {
     const out: Step[] = [];
 
@@ -61,6 +59,8 @@ export function ThinkingPanel({ live, lastTrace, onClose }: ThinkingPanelProps) 
       const reasoningEntries = Object.entries(live?.reasoning ?? {});
       const hasWinner = typeof t.winner === 'string' && t.winner.length > 0;
       const hasContent = (live?.content ?? '').length > 0;
+      const toolCallsList = t.toolCalls ?? [];
+      const hasTools = toolCallsList.length > 0;
 
       out.push({
         id: 'classify',
@@ -106,6 +106,14 @@ export function ThinkingPanel({ live, lastTrace, onClose }: ThinkingPanelProps) 
         detail: hasWinner ? [`🏆 ${t.winner}`] : [],
       });
 
+      // TOOL CALLS STEP (BARU)
+      out.push({
+        id: 'tools',
+        title: hasTools ? `🔧 Tool calls (${toolCallsList.length})` : '🔧 Tool calls',
+        state: hasTools ? 'done' : hasWinner ? 'active' : 'pending',
+        detail: toolCallsList.map((tc) => `🔧 ${tc.name} → ${JSON.stringify(tc.result ?? '').slice(0, 80)}`),
+      });
+
       out.push({
         id: 'answer',
         title: 'Menulis jawaban final',
@@ -121,6 +129,8 @@ export function ThinkingPanel({ live, lastTrace, onClose }: ThinkingPanelProps) 
       });
     } else if (idle && lastTrace?.tournament) {
       const lt = lastTrace.tournament;
+      const ltToolCalls = lt.toolCalls ?? [];
+
       out.push({
         id: 'classify',
         title: `Memahami permintaan (${lt.taskType ?? '?'})`,
@@ -155,6 +165,12 @@ export function ThinkingPanel({ live, lastTrace, onClose }: ThinkingPanelProps) 
         detail: [`🏆 ${lastTrace.modelUsed ?? lt.winner}`],
       });
       out.push({
+        id: 'tools',
+        title: `🔧 Tool calls (${ltToolCalls.length})`,
+        state: ltToolCalls.length > 0 ? 'done' : 'pending',
+        detail: ltToolCalls.map((tc) => `🔧 ${tc.name}`),
+      });
+      out.push({
         id: 'answer',
         title: 'Menulis jawaban final',
         state: 'done',
@@ -171,20 +187,16 @@ export function ThinkingPanel({ live, lastTrace, onClose }: ThinkingPanelProps) 
     return out;
   }, [idle, t, live, lastTrace]);
 
-  // ---------- hitung langkah yang terbuka (derived, tanpa effect) ----------
   const activeId = useMemo(() => steps.find((s) => s.state === 'active')?.id, [steps]);
   const openSteps = useMemo(() => {
     const base = new Set(manualOpen);
-    // langkah aktif selalu terbuka kecuali user menutupnya eksplisit
     if (activeId && !manualClosed.has(activeId)) base.add(activeId);
     return base;
   }, [manualOpen, manualClosed, activeId]);
 
-  // ---------- auto-scroll: DOM effect (bukan setState, jadi OK di effect) ----------
   useEffect(() => {
     const el = bodyRef.current;
     if (!el) return;
-    // hanya auto-scroll jika user sedang di dekat bawah
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
     if (atBottom) {
       el.scrollTo({ top: el.scrollHeight });
@@ -201,8 +213,8 @@ export function ThinkingPanel({ live, lastTrace, onClose }: ThinkingPanelProps) 
     });
     setManualClosed((prev) => {
       const next = new Set(prev);
-      if (isOpen && id === activeId) next.add(id); // user menutup langkah aktif
-      else if (!isOpen) next.delete(id); // user membuka -> bukan lagi "ditutup manual"
+      if (isOpen && id === activeId) next.add(id);
+      else if (!isOpen) next.delete(id);
       return next;
     });
   };
@@ -217,7 +229,7 @@ export function ThinkingPanel({ live, lastTrace, onClose }: ThinkingPanelProps) 
         {steps.length === 0 && (
           <div className="g-tp-idle">
             Kirim pertanyaan untuk melihat proses berpikir AI langkah demi langkah:
-            seleksi model → reasoning → penilaian judge → pemenang → jawaban.
+            seleksi model → reasoning → penilaian judge → tool calls → jawaban.
           </div>
         )}
 
