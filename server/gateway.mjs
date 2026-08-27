@@ -36,6 +36,7 @@ import { verifyWorkflow } from './lib/agent/verifier.mjs';
 import * as agentModes from './lib/agent/modes.mjs';
 import * as agentPerms from './lib/agent/permissions.mjs';
 import { detectQuestion } from './lib/agent/detect.mjs';
+import * as agentExecutor from './lib/agent/executor.mjs';
 
 const PORT = process.env.PORT ?? 4123;
 const PREMIUM_BUDGET = 16384;
@@ -1465,6 +1466,18 @@ const server = createServer(async (req, res) => {
       const detection = detectQuestion(body.question);
       const config = agentModes.resolveModeConfig('auto', detection.dials);
       json(res, 200, { detection, config });
+      return;
+    }
+    if (req.method === 'POST' && url.pathname === '/v1/agent/execute/step') {
+      const raw = await readBody(req);
+      let body;
+      try { body = JSON.parse(raw); } catch { json(res, 400, { error: { message: 'invalid JSON' } }); return; }
+      const { step, mode, dials } = body ?? {};
+      if (typeof step !== 'string') { json(res, 400, { error: { message: 'step string required' } }); return; }
+      const config = agentModes.resolveModeConfig(mode || 'manual', dials || {});
+      if (!config) { json(res, 404, { error: { message: `unknown mode: ${mode}` } }); return; }
+      const result = await agentExecutor.executeStep(step, config, gatewayCallModel);
+      json(res, 200, result);
       return;
     }
     if (req.method === 'GET' && url.pathname === '/v1/agent/modes') {
