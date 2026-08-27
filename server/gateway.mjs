@@ -37,6 +37,8 @@ import * as agentModes from './lib/agent/modes.mjs';
 import * as agentPerms from './lib/agent/permissions.mjs';
 import { detectQuestion } from './lib/agent/detect.mjs';
 import * as agentExecutor from './lib/agent/executor.mjs';
+import * as agentPlanner from './lib/agent/planner.mjs';
+import * as agentPlans from './lib/agent/plans.mjs';
 
 const PORT = process.env.PORT ?? 4123;
 const PREMIUM_BUDGET = 16384;
@@ -1478,6 +1480,50 @@ const server = createServer(async (req, res) => {
       if (!config) { json(res, 404, { error: { message: `unknown mode: ${mode}` } }); return; }
       const result = await agentExecutor.executeStep(step, config, gatewayCallModel);
       json(res, 200, result);
+      return;
+    }
+    // ----- PLANNING Mode (Fase 23D) -----
+    if (req.method === 'POST' && url.pathname === '/v1/agent/plans') {
+      const raw = await readBody(req);
+      let body;
+      try { body = JSON.parse(raw); } catch { json(res, 400, { error: { message: 'invalid JSON' } }); return; }
+      if (typeof body.task !== 'string') { json(res, 400, { error: { message: 'task string required' } }); return; }
+      const planData = await agentPlanner.generatePlan(body.task, gatewayCallModel);
+      if (!planData || planData.error) { json(res, 500, { error: { message: planData?.error || 'planner failed' } }); return; }
+      const plan = agentPlans.createPlan({
+        description: body.task,
+        workflow: planData.workflow,
+        claims: planData.claims || [],
+        questions: planData.questions || [],
+      });
+      json(res, 200, { plan, summary: planData.summary });
+      return;
+    }
+
+    if (req.method === 'GET' && url.pathname === '/v1/agent/plans') {
+      json(res, 200, { plans: agentPlans.listPlans() });
+      return;
+    }
+
+    if (req.method === 'GET' && url.pathname.startsWith('/v1/agent/plans/')) {
+      const id = url.pathname.split('/').pop();
+      const plan = agentPlans.getPlan(id);
+      if (!plan) { json(res, 404, { error: { message: 'plan not found' } }); return; }
+      json(res, 200, plan);
+      return;
+    }
+
+    if (req.method === 'POST' && /^\/v1\/agent\/plans\/[^/]+\/approve$/.test(url.pathname)) {
+      const id = url.pathname.split('/')[4];
+      const plan = agentPlans.approvePlan(id);
+      if (!plan) { json(res, 404, { error: { message: 'plan not found' } }); return; }
+      json(res, 200, plan);
+      return;
+    }
+
+    if (req.method === 'DELETE' && url.pathname.startsWith('/v1/agent/plans/')) {
+      const id = url.pathname.split('/').pop();
+      json(res, 200, agentPlans.deletePlan(id));
       return;
     }
     if (req.method === 'GET' && url.pathname === '/v1/agent/modes') {
