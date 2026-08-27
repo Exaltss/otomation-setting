@@ -32,6 +32,9 @@ import { listChats, removeChat, upsertChat } from './lib/chats.mjs';
 import { executeToolCall } from './lib/tools.mjs';
 import { executeWorkflow } from './lib/workflow/engine.mjs';
 import * as wfStore from './lib/workflow/store.mjs';
+import { verifyWorkflow } from './lib/agent/verifier.mjs';
+import * as agentModes from './lib/agent/modes.mjs';
+import * as agentPerms from './lib/agent/permissions.mjs';
 
 const PORT = process.env.PORT ?? 4123;
 const PREMIUM_BUDGET = 16384;
@@ -1430,6 +1433,64 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    // ----- Self-Verifying AI Agent (Fase 23) -----
+    if (req.method === 'POST' && url.pathname === '/v1/agent/verify') {
+      const raw = await readBody(req);
+      let body;
+      try {
+        body = JSON.parse(raw);
+      } catch {
+        json(res, 400, { error: { message: 'invalid JSON body' } });
+        return;
+      }
+      if (!body.results || typeof body.results !== 'object') {
+        json(res, 400, { error: { message: 'results object is required' } });
+        return;
+      }
+      try {
+        const report = await verifyWorkflow(body, gatewayCallModel);
+        json(res, 200, report);
+      } catch (e) {
+        json(res, 500, { error: { message: `verifier error: ${String(e?.message ?? e)}` } });
+      }
+      return;
+    }
+    // ----- Mode & Permission System (Fase 23A) -----
+    if (req.method === 'GET' && url.pathname === '/v1/agent/modes') {
+      json(res, 200, { modes: agentModes.MODES });
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/v1/agent/config/resolve') {
+      const raw = await readBody(req);
+      let body;
+      try { body = JSON.parse(raw); } catch { json(res, 400, { error: { message: 'invalid JSON' } }); return; }
+      const cfg = agentModes.resolveModeConfig(body.mode, body.dials ?? {});
+      if (!cfg) { json(res, 404, { error: { message: `unknown mode: ${body.mode}` } }); return; }
+      json(res, 200, cfg);
+      return;
+    }
+
+    if (req.method === 'GET' && url.pathname === '/v1/agent/permissions') {
+      json(res, 200, agentPerms.listPermissions());
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/v1/agent/permissions') {
+      const raw = await readBody(req);
+      let body;
+      try { body = JSON.parse(raw); } catch { json(res, 400, { error: { message: 'invalid JSON' } }); return; }
+      const { type, action, scope } = body ?? {};
+      if (action === 'deny') { json(res, 200, agentPerms.denyPermission(type)); return; }
+      if (action === 'revoke') { json(res, 200, agentPerms.revokePermission(type)); return; }
+      json(res, 200, agentPerms.grantPermission(type, scope === 'persistent' ? 'persistent' : 'session'));
+      return;
+    }
+
+    if (req.method === 'GET' && url.pathname === '/v1/agent/audit') {
+      json(res, 200, { audit: agentPerms.getAuditLog() });
+      return;
+    }
     // ----- Workflow Engine (n8n-style) -----
     if (req.method === 'POST' && url.pathname === '/v1/workflow/execute') {
       const raw = await readBody(req);
