@@ -31,3 +31,6 @@ test-*.sh
 
 # Runtime data & secrets (local-only)
 server/data/
+
+# Debug/test scripts (local-only)
+test-*.sh
