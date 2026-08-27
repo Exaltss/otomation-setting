@@ -39,6 +39,8 @@ import { detectQuestion } from './lib/agent/detect.mjs';
 import * as agentExecutor from './lib/agent/executor.mjs';
 import * as agentPlanner from './lib/agent/planner.mjs';
 import * as agentPlans from './lib/agent/plans.mjs';
+import * as agentRemote from './lib/agent/remote.mjs';
+import * as agentSpecialists from './lib/agent/specialists.mjs';
 
 const PORT = process.env.PORT ?? 4123;
 const PREMIUM_BUDGET = 16384;
@@ -1524,6 +1526,30 @@ const server = createServer(async (req, res) => {
     if (req.method === 'DELETE' && url.pathname.startsWith('/v1/agent/plans/')) {
       const id = url.pathname.split('/').pop();
       json(res, 200, agentPlans.deletePlan(id));
+      return;
+    }
+    // ----- AUTO REMOTE Mode (Fase 23E) -----
+    if (req.method === 'POST' && url.pathname === '/v1/agent/remote') {
+      const raw = await readBody(req);
+      let body;
+      try { body = JSON.parse(raw); } catch { json(res, 400, { error: { message: 'invalid JSON' } }); return; }
+      if (typeof body.task !== 'string') { json(res, 400, { error: { message: 'task string required' } }); return; }
+      const askPermission = async (type) => {
+        if (body.autoApprovePermissions && Array.isArray(body.autoApprovePermissions) && body.autoApprovePermissions.includes(type)) {
+          return { choice: 'session' };
+        }
+        return { choice: 'deny' };
+      };
+      const result = await agentRemote.executeRemote(body.task, gatewayCallModel, {
+        askPermission,
+        silentVerify: body.silentVerify !== false,
+      });
+      json(res, 200, result);
+      return;
+    }
+
+    if (req.method === 'GET' && url.pathname === '/v1/agent/specialists') {
+      json(res, 200, { specialists: agentSpecialists.SPECIALISTS });
       return;
     }
     if (req.method === 'GET' && url.pathname === '/v1/agent/modes') {
