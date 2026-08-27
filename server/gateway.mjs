@@ -35,6 +35,7 @@ import * as wfStore from './lib/workflow/store.mjs';
 import { verifyWorkflow } from './lib/agent/verifier.mjs';
 import * as agentModes from './lib/agent/modes.mjs';
 import * as agentPerms from './lib/agent/permissions.mjs';
+import { detectQuestion } from './lib/agent/detect.mjs';
 
 const PORT = process.env.PORT ?? 4123;
 const PREMIUM_BUDGET = 16384;
@@ -1456,6 +1457,16 @@ const server = createServer(async (req, res) => {
       return;
     }
     // ----- Mode & Permission System (Fase 23A) -----
+    if (req.method === 'POST' && url.pathname === '/v1/agent/detect') {
+      const raw = await readBody(req);
+      let body;
+      try { body = JSON.parse(raw); } catch { json(res, 400, { error: { message: 'invalid JSON' } }); return; }
+      if (typeof body.question !== 'string') { json(res, 400, { error: { message: 'question string required' } }); return; }
+      const detection = detectQuestion(body.question);
+      const config = agentModes.resolveModeConfig('auto', detection.dials);
+      json(res, 200, { detection, config });
+      return;
+    }
     if (req.method === 'GET' && url.pathname === '/v1/agent/modes') {
       json(res, 200, { modes: agentModes.MODES });
       return;

@@ -8,7 +8,7 @@ export const MODES = {
   auto: {
     name: 'Auto',
     description: 'Sistem otomatis deteksi pertanyaan dan pilih setting terbaik.',
-    autonomy: 'auto', // boleh tanya kalau high risk
+    autonomy: 'auto',
   },
   manual: {
     name: 'Manual',
@@ -27,7 +27,6 @@ export const MODES = {
   },
 };
 
-// Dial 1: Intelligence → memilih model / tier
 export const INTELLIGENCE_LEVELS = {
   low:    { tier: 'standart', tournament: false },
   medium: { tier: 'standart', tournament: true },
@@ -35,7 +34,6 @@ export const INTELLIGENCE_LEVELS = {
   max:    { tier: 'max',      tournament: true },
 };
 
-// Dial 2: Thinking → seberapa dalam reasoning
 export const THINKING_LEVELS = {
   low:    { reasoningMaxTokens: 128 },
   medium: { reasoningMaxTokens: 512 },
@@ -43,7 +41,6 @@ export const THINKING_LEVELS = {
   max:    { reasoningMaxTokens: 8192 },
 };
 
-// Dial 3: Halusinasi → seberapa ketat mencegah ngawur
 export const HALLUCINATION_LEVELS = {
   low:    { temperature: 0.7, forceTools: false, verifier: false },
   medium: { temperature: 0.3, forceTools: true,  verifier: 'light' },
@@ -66,8 +63,8 @@ export function resolveModeConfig(mode, userDials = {}) {
     // user pegang kendali penuh
     dials = { ...DEFAULT_DIALS, ...userDials };
   } else if (mode === 'auto') {
-    // 23B akan override dengan deteksi; default medium dulu
-    dials = { ...DEFAULT_DIALS };
+    // [FIX] auto mode juga accept detection dials dari userDials
+    dials = { ...DEFAULT_DIALS, ...userDials };
   } else {
     // planning & auto_remote = max semua (fitur terbaik)
     dials = { ...MAX_DIALS };
