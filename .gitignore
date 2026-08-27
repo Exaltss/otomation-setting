@@ -25,3 +25,9 @@ dist-ssr
 .env
 server/data/
 server/data/circuit.json
+
+# Debug/test scripts (local-only tooling)
+test-*.sh
+
+# Runtime data & secrets (local-only)
+server/data/
