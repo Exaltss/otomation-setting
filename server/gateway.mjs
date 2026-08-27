@@ -41,6 +41,7 @@ import * as agentPlanner from './lib/agent/planner.mjs';
 import * as agentPlans from './lib/agent/plans.mjs';
 import * as agentRemote from './lib/agent/remote.mjs';
 import * as agentSpecialists from './lib/agent/specialists.mjs';
+import * as agentContext from './lib/agent/context.mjs';
 
 const PORT = process.env.PORT ?? 4123;
 const PREMIUM_BUDGET = 16384;
@@ -1541,6 +1542,7 @@ const server = createServer(async (req, res) => {
         return { choice: 'deny' };
       };
       const result = await agentRemote.executeRemote(body.task, gatewayCallModel, {
+        sessionId: body.sessionId,
         askPermission,
         silentVerify: body.silentVerify !== false,
       });
@@ -1550,6 +1552,10 @@ const server = createServer(async (req, res) => {
 
     if (req.method === 'GET' && url.pathname === '/v1/agent/specialists') {
       json(res, 200, { specialists: agentSpecialists.SPECIALISTS });
+      return;
+    }
+    if (req.method === 'GET' && url.pathname === '/v1/agent/sessions') {
+      json(res, 200, { sessions: agentContext.listSessions() });
       return;
     }
     if (req.method === 'GET' && url.pathname === '/v1/agent/modes') {
