@@ -1,10 +1,5 @@
 /**
- * otomation-setting AI Gateway — Fase 21: Genius Frugal Mode + Workflow Engine.
- * - Pintar maksimal: ensemble judge + tool-verified + sampling presisi
- * - Zero halusinasi: temp rendah, wajib tool untuk math/fakta, anti-hallucination rules
- * - Hemat: trivial early-exit, cache, reasoning pendek, skip validation tool-verified
- * - Robust: timeout 5 menit untuk coding, retry ETIMEDOUT, anti-truncation + silent compliance
- * - Workflow: DAG runner eksekutabel via POST /v1/workflow/execute
+ * otomation-setting AI Gateway — n8n-style Workflow Engine + Genius Frugal Mode.
  */
 import { createServer } from 'node:http';
 import { existsSync, readFileSync } from 'node:fs';
@@ -35,7 +30,8 @@ import { createCombo, deleteCombo, getCombo, listCombos } from './lib/combo.mjs'
 import { cacheClear, cacheGet, cachePut, cacheStats } from './lib/cache.mjs';
 import { listChats, removeChat, upsertChat } from './lib/chats.mjs';
 import { executeToolCall } from './lib/tools.mjs';
-import { executeWorkflow } from './lib/workflow.mjs';
+import { executeWorkflow } from './lib/workflow/engine.mjs';
+import * as wfStore from './lib/workflow/store.mjs';
 
 const PORT = process.env.PORT ?? 4123;
 const PREMIUM_BUDGET = 16384;
@@ -68,6 +64,9 @@ const SAMPLING = {
   reasoningFinal: { temperature: 0.35, top_p: 0.9, seed: 1337 },
   writing: { temperature: 0.8, top_p: 0.95, presence_penalty: 0.3 },
   trivial: { temperature: 0.3, top_p: 0.9 },
+  // [Fase 21] Automation wajib deterministik — temperature rendah, tanpa seed
+  // (seed tidak didukung semua provider; temperature 0.1 cukup untuk konsistensi)
+  workflow: { temperature: 0.1, top_p: 0.9 },
 };
 
 function samplingFor(taskType) {
@@ -256,7 +255,7 @@ let warmSlug = null;
 
 /**
  * Helper untuk workflow engine: call model via gateway internal logic.
- * 'auto' → warmSlug (model pemenang terakhir) atau cfg.model.
+ * [Fase 21] Pakai SAMPLING.workflow — deterministik untuk automation.
  */
 async function gatewayCallModel(modelSlug, messages) {
   const cfg = readConfig();
@@ -266,7 +265,7 @@ async function gatewayCallModel(modelSlug, messages) {
       : warmSlug && !isBroken(warmSlug)
         ? warmSlug
         : cfg.model;
-  return callModel(slug, messages, { maxTokens: 4096, sampling: SAMPLING.reasoningFinal });
+  return callModel(slug, messages, { maxTokens: 4096, sampling: SAMPLING.workflow });
 }
 
 function parseScoreText(text) {
@@ -381,6 +380,25 @@ async function streamCall(slug, messages, onDelta, { maxTokens = 4096, sampling 
   clearTimeout(timer);
   clearBreaker(slug);
   return { content: acc, reasoning: reasonAcc };
+}
+
+/** Stream eksekusi workflow via SSE + simpan run ke history. */
+async function streamWorkflowRun(res, workflow) {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+    'Access-Control-Allow-Origin': '*',
+  });
+  const emit = (data) => res.write(`event: workflow\ndata: ${JSON.stringify(data)}\n\n`);
+  try {
+    const run = await executeWorkflow(workflow, { emit, callModel: gatewayCallModel });
+    wfStore.appendRun(run);
+  } catch (e) {
+    emit({ type: 'error', error: String(e?.message ?? e) });
+  }
+  res.write('data: [DONE]\n\n');
+  res.end();
 }
 
 async function handleTournamentStream(ctx, res) {
@@ -741,7 +759,6 @@ async function handleTournamentStream(ctx, res) {
   trace.winner = winner;
   emit('tournament', { type: 'winner', winner, synthesis: false });
 
-  // ----- 3) AGENT MODE dengan retry ETIMEDOUT -----
   let output = '';
   let toolLoopCount = 0;
   const MAX_TOOL_LOOPS = 5;
@@ -758,6 +775,9 @@ You have access to these tools:
 - file_rw: read/write files, params {"action":"read|write","filename":"...","content":"..."}
 - js_sandbox: run JavaScript in safe sandbox, params {"code": "..."} — use to TEST your code
 - http_request: make HTTP request, params {"url":"...","method":"GET|POST"}
+- image_gen: generate image from prompt, params {"prompt": "..."} — ALWAYS use for image creation
+- whatsapp_send: send WhatsApp message, params {"to": "...", "message": "...", "file": "..."}
+- gdrive_upload: upload file to Drive, params {"file": "...", "name": "..."}
 
 When you need a tool, output EXACTLY one block like this and stop:
 <TOOL_CALL name="math">{"expression": "25 * 37"}</TOOL_CALL>
@@ -944,7 +964,6 @@ Then continue to the final answer. Never include TOOL_CALL blocks in the final a
     console.error('[agent] error:', e);
   }
 
-  // ----- 3.5) CONTINUATION DETECTION -----
   const openFences = (output.match(/```/g) ?? []).length;
   const codeStarts = (output.match(/```\w+\n/g) ?? []).length;
   const isTruncated = taskType === 'coding' && codeStarts > 0 && openFences % 2 !== 0;
@@ -994,7 +1013,6 @@ Then continue to the final answer. Never include TOOL_CALL blocks in the final a
     }
   }
 
-  // ----- 4) VALIDATION (SMART SKIP) -----
   const toolVerified = trace.toolCalls.length > 0 && output.trim().length > 10;
   if (toolVerified) {
     console.log('[validation] skipped: tool-verified answer');
@@ -1412,7 +1430,7 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    // ----- Workflow Execution (Fase 21) -----
+    // ----- Workflow Engine (n8n-style) -----
     if (req.method === 'POST' && url.pathname === '/v1/workflow/execute') {
       const raw = await readBody(req);
       let body;
@@ -1422,30 +1440,75 @@ const server = createServer(async (req, res) => {
         json(res, 400, { error: { message: 'invalid JSON body' } });
         return;
       }
-
-      const { nodes, edges } = body;
-      if (!Array.isArray(nodes) || !Array.isArray(edges)) {
+      if (!Array.isArray(body.nodes) || !Array.isArray(body.edges)) {
         json(res, 400, { error: { message: 'nodes and edges arrays are required' } });
         return;
       }
+      await streamWorkflowRun(res, body);
+      return;
+    }
 
-      res.writeHead(200, {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        Connection: 'keep-alive',
-        'Access-Control-Allow-Origin': '*',
-      });
+    if (req.method === 'GET' && url.pathname === '/v1/workflows') {
+      json(res, 200, { workflows: wfStore.listWorkflows() });
+      return;
+    }
 
-      const emit = (data) => res.write(`event: workflow\ndata: ${JSON.stringify(data)}\n\n`);
-
+    if (req.method === 'POST' && url.pathname === '/v1/workflows') {
+      const raw = await readBody(req);
+      let body;
       try {
-        await executeWorkflow(nodes, edges, emit, gatewayCallModel);
-      } catch (e) {
-        emit({ type: 'error', error: String(e?.message ?? e) });
+        body = JSON.parse(raw);
+      } catch {
+        json(res, 400, { error: { message: 'invalid JSON body' } });
+        return;
       }
+      json(res, 200, wfStore.saveWorkflow(body));
+      return;
+    }
 
-      res.write('data: [DONE]\n\n');
-      res.end();
+    if (req.method === 'DELETE' && url.pathname.startsWith('/v1/workflows/')) {
+      const id = url.pathname.split('/').pop() ?? '';
+      wfStore.deleteWorkflow(id);
+      json(res, 200, { ok: true });
+      return;
+    }
+
+    if (req.method === 'POST' && /^\/v1\/workflows\/[^/]+\/run$/.test(url.pathname)) {
+      const id = url.pathname.split('/')[3];
+      const wf = wfStore.getWorkflow(id);
+      if (!wf) {
+        json(res, 404, { error: { message: 'workflow not found' } });
+        return;
+      }
+      await streamWorkflowRun(res, wf);
+      return;
+    }
+
+    if (req.method === 'GET' && url.pathname === '/v1/workflow/runs') {
+      json(res, 200, { runs: wfStore.listRuns() });
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname.startsWith('/v1/hooks/')) {
+      const id = url.pathname.split('/').pop() ?? '';
+      const wf = wfStore.getWorkflow(id);
+      if (!wf) {
+        json(res, 404, { error: { message: 'workflow not found' } });
+        return;
+      }
+      const raw = await readBody(req);
+      let hookInput;
+      try {
+        hookInput = JSON.parse(raw || '{}');
+      } catch {
+        hookInput = { raw };
+      }
+      const nodes = wf.nodes.map((n) =>
+        n.type === 'trigger' ? { ...n, data: { ...n.data, context: JSON.stringify(hookInput) } } : n,
+      );
+      const run = await executeWorkflow({ ...wf, nodes }, { callModel: gatewayCallModel });
+      wfStore.appendRun(run);
+      json(res, 200, run);
       return;
     }
 
@@ -1603,5 +1666,5 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`otomation-setting AI Gateway (Fase 21: Genius Frugal + Workflow Engine) siap di http://localhost:${PORT}/v1`);
+  console.log(`otomation-setting AI Gateway (n8n-style Workflow + deterministic sampling) siap di http://localhost:${PORT}/v1`);
 });

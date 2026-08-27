@@ -1,0 +1,369 @@
+/* Workflow Canvas Styles */
+.g-wf-container {
+  display: flex;
+  height: calc(100vh - 60px);
+  gap: 0;
+}
+
+.g-wf-palette {
+  width: 280px;
+  background: #1e1e1e;
+  border-right: 1px solid #333;
+  padding: 20px;
+  overflow-y: auto;
+}
+
+.g-wf-palette h3 {
+  margin: 0 0 20px 0;
+  font-size: 16px;
+  color: #fff;
+}
+
+.g-wf-palette .node-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.g-wf-palette .palette-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px;
+  background: #2a2a2a;
+  border: 1px solid #3a3a3a;
+  border-radius: 8px;
+  cursor: grab;
+  transition: all 0.2s;
+}
+
+.g-wf-palette .palette-item:hover {
+  background: #333;
+  border-color: #4a9eff;
+}
+
+.g-wf-palette .palette-item:active {
+  cursor: grabbing;
+}
+
+.g-wf-palette .palette-item .icon {
+  font-size: 24px;
+  flex-shrink: 0;
+}
+
+.g-wf-palette .palette-item .info {
+  flex: 1;
+}
+
+.g-wf-palette .palette-item .label {
+  font-weight: 600;
+  color: #fff;
+  margin-bottom: 4px;
+}
+
+.g-wf-palette .palette-item .description {
+  font-size: 12px;
+  color: #888;
+}
+
+.g-wf-palette .palette-help {
+  margin-top: 20px;
+  padding: 12px;
+  background: #252525;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #888;
+}
+
+.g-wf-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: #131314;
+}
+
+.g-wf-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 24px;
+  background: #1e1e1e;
+  border-bottom: 1px solid #333;
+}
+
+.g-wf-toolbar h2 {
+  margin: 0;
+  font-size: 18px;
+  color: #fff;
+}
+
+.g-wf-toolbar .btn-run {
+  padding: 10px 24px;
+  background: #4a9eff;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.g-wf-toolbar .btn-run:hover:not(:disabled) {
+  background: #3a8eef;
+}
+
+.g-wf-toolbar .btn-run:disabled {
+  background: #333;
+  color: #666;
+  cursor: not-allowed;
+}
+
+.g-wf-toolbar .btn-run.running {
+  background: #ff9800;
+}
+
+.g-wf-canvas {
+  flex: 1;
+  position: relative;
+}
+
+/* Node Styles */
+.g-wf-node {
+  padding: 12px;
+  background: #2a2a2a;
+  border: 2px solid #3a3a3a;
+  border-radius: 8px;
+  min-width: 200px;
+  transition: all 0.2s;
+}
+
+.g-wf-node.selected {
+  border-color: #4a9eff;
+  box-shadow: 0 0 0 2px rgba(74, 158, 255, 0.2);
+}
+
+.g-wf-node.status-running {
+  border-color: #ff9800;
+  animation: pulse 1s infinite;
+}
+
+.g-wf-node.status-done {
+  border-color: #4caf50;
+}
+
+.g-wf-node.status-error {
+  border-color: #f44336;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+.g-wf-node-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.g-wf-node-header .icon {
+  font-size: 18px;
+}
+
+.g-wf-node-header .title {
+  font-weight: 600;
+  color: #fff;
+  font-size: 14px;
+}
+
+.g-wf-node-body .preview {
+  font-size: 12px;
+  color: #888;
+  word-break: break-word;
+}
+
+.g-wf-handle {
+  width: 8px;
+  height: 8px;
+  background: #4a9eff;
+  border: 2px solid #fff;
+}
+
+/* Config Drawer */
+.g-wf-drawer-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  justify-content: flex-end;
+  z-index: 1000;
+}
+
+.g-wf-drawer {
+  width: 400px;
+  background: #1e1e1e;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  animation: slideIn 0.2s ease-out;
+}
+
+@keyframes slideIn {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+.g-wf-drawer header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px;
+  border-bottom: 1px solid #333;
+}
+
+.g-wf-drawer header h3 {
+  margin: 0;
+  color: #fff;
+}
+
+.g-wf-drawer .close-btn {
+  background: none;
+  border: none;
+  color: #888;
+  font-size: 20px;
+  cursor: pointer;
+  padding: 4px 8px;
+}
+
+.g-wf-drawer .close-btn:hover {
+  color: #fff;
+}
+
+.g-wf-drawer .body {
+  flex: 1;
+  padding: 20px;
+  overflow-y: auto;
+}
+
+.g-wf-drawer .field {
+  margin-bottom: 20px;
+}
+
+.g-wf-drawer .field label {
+  display: block;
+  margin-bottom: 8px;
+  color: #ccc;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.g-wf-drawer .field input,
+.g-wf-drawer .field textarea,
+.g-wf-drawer .field select {
+  width: 100%;
+  padding: 10px;
+  background: #2a2a2a;
+  border: 1px solid #3a3a3a;
+  border-radius: 6px;
+  color: #fff;
+  font-size: 14px;
+  font-family: inherit;
+}
+
+.g-wf-drawer .field input:focus,
+.g-wf-drawer .field textarea:focus,
+.g-wf-drawer .field select:focus {
+  outline: none;
+  border-color: #4a9eff;
+}
+
+.g-wf-drawer .field textarea.code-editor {
+  font-family: 'Courier New', monospace;
+  font-size: 13px;
+}
+
+.g-wf-drawer .field.info {
+  padding: 12px;
+  background: #252525;
+  border-radius: 6px;
+  color: #888;
+  font-size: 13px;
+}
+
+.g-wf-drawer footer {
+  display: flex;
+  gap: 12px;
+  padding: 20px;
+  border-top: 1px solid #333;
+}
+
+.g-wf-drawer .btn-secondary,
+.g-wf-drawer .btn-primary {
+  flex: 1;
+  padding: 12px;
+  border: none;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.g-wf-drawer .btn-secondary {
+  background: #333;
+  color: #fff;
+}
+
+.g-wf-drawer .btn-secondary:hover {
+  background: #3a3a3a;
+}
+
+.g-wf-drawer .btn-primary {
+  background: #4a9eff;
+  color: #fff;
+}
+
+.g-wf-drawer .btn-primary:hover {
+  background: #3a8eef;
+}
+
+/* Output Panel */
+.g-wf-output {
+  background: #1e1e1e;
+  border-top: 1px solid #333;
+  max-height: 300px;
+  display: flex;
+  flex-direction: column;
+}
+
+.g-wf-output header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 20px;
+  border-bottom: 1px solid #333;
+}
+
+.g-wf-output header h3 {
+  margin: 0;
+  color: #fff;
+  font-size: 14px;
+}
+
+.g-wf-output pre {
+  flex: 1;
+  padding: 16px 20px;
+  margin: 0;
+  overflow: auto;
+  font-family: 'Courier New', monospace;
+  font-size: 13px;
+  color: #ccc;
+  background: #131314;
+}

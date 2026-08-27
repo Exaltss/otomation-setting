@@ -1,6 +1,7 @@
 /**
  * Tool Registry — 8 tool untuk agent mode & workflow.
- * math/web_fetch/file_rw/js_sandbox/http_request + image_gen/whatsapp_send/gdrive_upload.
+ * math / web_fetch / file_rw / js_sandbox / http_request
+ * + image_gen / whatsapp_send / gdrive_upload
  */
 import {
   existsSync,
@@ -102,15 +103,23 @@ async function jsSandbox(params) {
     if (syntax.status !== 0) return { error: `syntax error: ${String(syntax.stderr).slice(0, 200)}` };
     const exec = spawnSync('node', [file], { encoding: 'utf8', timeout: 5000, env: { NODE_ENV: 'test', NO_COLOR: '1' } });
     if (exec.error?.code === 'ETIMEDOUT' || exec.signal === 'SIGTERM') return { error: 'timeout (5s)' };
-    return { stdout: String(exec.stdout ?? '').slice(0, 2000), stderr: String(exec.stderr ?? '').slice(0, 500), exitCode: exec.status };
+    return {
+      stdout: String(exec.stdout ?? '').slice(0, 2000),
+      stderr: String(exec.stderr ?? '').slice(0, 500),
+      exitCode: exec.status,
+    };
   } catch (e) {
     return { error: String(e?.message ?? e) };
   } finally {
-    try { unlinkSync(file); rmdirSync(dir); } catch { /* abaikan */ }
+    try {
+      unlinkSync(file);
+      rmdirSync(dir);
+    } catch {
+      // abaikan
+    }
   }
 }
 
-// ---------- math parser (shunting-yard) ----------
 function tokenizeMath(expr) {
   const tokens = [];
   const s = String(expr).replace(/\s+/g, '');
@@ -119,13 +128,20 @@ function tokenizeMath(expr) {
     const ch = s[i];
     if (/[0-9.]/.test(ch)) {
       let num = '';
-      while (i < s.length && /[0-9.]/.test(s[i])) { num += s[i]; i += 1; }
+      while (i < s.length && /[0-9.]/.test(s[i])) {
+        num += s[i];
+        i += 1;
+      }
       const val = Number(num);
       if (!Number.isFinite(val)) throw new Error(`invalid number: ${num}`);
       tokens.push({ type: 'num', value: val });
       continue;
     }
-    if ('+-*/()%^'.includes(ch)) { tokens.push({ type: 'op', value: ch }); i += 1; continue; }
+    if ('+-*/()%^'.includes(ch)) {
+      tokens.push({ type: 'op', value: ch });
+      i += 1;
+      continue;
+    }
     throw new Error(`unexpected character: ${ch}`);
   }
   return tokens;
@@ -139,9 +155,11 @@ function toRPN(tokens) {
   const stack = [];
   let prev = null;
   for (const tok of tokens) {
-    if (tok.type === 'num') out.push(tok);
-    else if (tok.value === '(') stack.push(tok);
-    else if (tok.value === ')') {
+    if (tok.type === 'num') {
+      out.push(tok);
+    } else if (tok.value === '(') {
+      stack.push(tok);
+    } else if (tok.value === ')') {
       while (stack.length && stack[stack.length - 1].value !== '(') out.push(stack.pop());
       if (!stack.length) throw new Error('mismatched parentheses');
       stack.pop();
@@ -171,8 +189,9 @@ function toRPN(tokens) {
 function evalRPN(rpn) {
   const st = [];
   for (const tok of rpn) {
-    if (tok.type === 'num') st.push(tok.value);
-    else {
+    if (tok.type === 'num') {
+      st.push(tok.value);
+    } else {
       const b = st.pop();
       const a = st.pop();
       if (a === undefined || b === undefined) throw new Error('invalid expression');
@@ -205,7 +224,6 @@ async function math(params) {
   }
 }
 
-// ---------- image_gen (Pollinations.ai — gratis, tanpa key) ----------
 async function imageGen(params) {
   const { prompt, width = 1024, height = 1024 } = params;
   if (typeof prompt !== 'string' || !prompt.trim()) return { error: 'prompt required' };
@@ -227,7 +245,6 @@ async function imageGen(params) {
   }
 }
 
-// ---------- whatsapp_send (Fonnte / CallMeBot) ----------
 async function whatsappSend(params) {
   const { to, message, file } = params;
   if (typeof to !== 'string' || typeof message !== 'string') return { error: 'to and message required' };
@@ -269,7 +286,6 @@ async function whatsappSend(params) {
   return { error: 'whatsapp provider belum dikonfigurasi. Set key "fonnte" atau "callmebot" via POST /admin/api/keys' };
 }
 
-// ---------- gdrive_upload (Service Account JWT — murni Node) ----------
 async function saToken(sa) {
   const now = Math.floor(Date.now() / 1000);
   const header = { alg: 'RS256', typ: 'JWT' };
@@ -303,7 +319,10 @@ async function gdriveUpload(params) {
 
   if (typeof file === 'string') {
     const p = path.join(TOOLS_DIR(), safeName(file));
-    if (existsSync(p)) { buf = readFileSync(p); fileName = fileName ?? safeName(file); }
+    if (existsSync(p)) {
+      buf = readFileSync(p);
+      fileName = fileName ?? safeName(file);
+    }
   } else if (typeof url === 'string') {
     try {
       const res = await fetch(url);
@@ -316,7 +335,6 @@ async function gdriveUpload(params) {
   if (!buf) return { error: 'file tidak ditemukan / url wajib diisi' };
   fileName = fileName ?? `upload_${Date.now()}.jpg`;
 
-  // Mode 1: webhook (Make.com / n8n / Zapier)
   const webhook = getKey('gdrive_webhook');
   if (webhook) {
     try {
@@ -332,7 +350,6 @@ async function gdriveUpload(params) {
     }
   }
 
-  // Mode 2: Service Account Google
   const saRaw = getKey('gdrive_sa');
   if (saRaw) {
     try {
@@ -360,28 +377,24 @@ async function gdriveUpload(params) {
     }
   }
 
-  return { error: 'gdrive belum dikonfigurasi. Set key "gdrive_webhook" atau "gdrive_sa" via POST /admin/api/keys' };
+  return { error: 'gdrive belum dikonfigurasi. Set key "gdrive_sa" atau "gdrive_webhook" via POST /admin/api/keys' };
 }
 
 export const TOOLS = {
   web_fetch: {
     name: 'web_fetch',
-    description: 'Fetch content from a URL. Returns text content (max 4000 chars).',
-    parameters: {
-      type: 'object',
-      properties: { url: { type: 'string', description: 'The URL to fetch' } },
-      required: ['url'],
-    },
+    description: 'Fetch content from a URL.',
+    parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] },
     execute: webFetch,
   },
   http_request: {
     name: 'http_request',
-    description: 'Make HTTP request (GET/POST/PUT/DELETE) with custom headers and body.',
+    description: 'Make HTTP request (GET/POST/PUT/DELETE).',
     parameters: {
       type: 'object',
       properties: {
         url: { type: 'string' },
-        method: { type: 'string', enum: ['GET', 'POST', 'PUT', 'DELETE'] },
+        method: { type: 'string' },
         headers: { type: 'object' },
         body: { type: 'object' },
       },
@@ -395,7 +408,7 @@ export const TOOLS = {
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['read', 'write'] },
+        action: { type: 'string' },
         filename: { type: 'string' },
         content: { type: 'string' },
       },
@@ -405,62 +418,42 @@ export const TOOLS = {
   },
   js_sandbox: {
     name: 'js_sandbox',
-    description: 'Execute JavaScript code in a sandbox (no fs/net/child_process, 5s timeout).',
-    parameters: {
-      type: 'object',
-      properties: { code: { type: 'string' } },
-      required: ['code'],
-    },
+    description: 'Execute JavaScript code in a sandbox.',
+    parameters: { type: 'object', properties: { code: { type: 'string' } }, required: ['code'] },
     execute: jsSandbox,
   },
   math: {
     name: 'math',
-    description: 'Evaluate mathematical expression (safe parser).',
-    parameters: {
-      type: 'object',
-      properties: { expression: { type: 'string' } },
-      required: ['expression'],
-    },
+    description: 'Evaluate mathematical expression.',
+    parameters: { type: 'object', properties: { expression: { type: 'string' } }, required: ['expression'] },
     execute: math,
   },
   image_gen: {
     name: 'image_gen',
-    description: 'Generate an image from a text prompt (free, no API key). Saves to server/data/tools/ and returns url + file.',
+    description: 'Generate an image from a text prompt (free, no API key).',
     parameters: {
       type: 'object',
-      properties: {
-        prompt: { type: 'string', description: 'English image description' },
-        width: { type: 'number' },
-        height: { type: 'number' },
-      },
+      properties: { prompt: { type: 'string' }, width: { type: 'number' }, height: { type: 'number' } },
       required: ['prompt'],
     },
     execute: imageGen,
   },
   whatsapp_send: {
     name: 'whatsapp_send',
-    description: 'Send WhatsApp message (optionally with image file). Requires key "fonnte" or "callmebot".',
+    description: 'Send WhatsApp message. Requires key "fonnte" or "callmebot".',
     parameters: {
       type: 'object',
-      properties: {
-        to: { type: 'string', description: 'phone number, e.g. 628123456789' },
-        message: { type: 'string' },
-        file: { type: 'string', description: 'local filename in server/data/tools/' },
-      },
+      properties: { to: { type: 'string' }, message: { type: 'string' }, file: { type: 'string' } },
       required: ['to', 'message'],
     },
     execute: whatsappSend,
   },
   gdrive_upload: {
     name: 'gdrive_upload',
-    description: 'Upload file to Google Drive. Requires key "gdrive_sa" (service account JSON) or "gdrive_webhook".',
+    description: 'Upload file to Google Drive. Requires key "gdrive_sa" or "gdrive_webhook".',
     parameters: {
       type: 'object',
-      properties: {
-        file: { type: 'string', description: 'local filename in server/data/tools/' },
-        url: { type: 'string', description: 'or remote URL to download & upload' },
-        name: { type: 'string', description: 'target filename in Drive' },
-      },
+      properties: { file: { type: 'string' }, url: { type: 'string' }, name: { type: 'string' } },
       required: [],
     },
     execute: gdriveUpload,
